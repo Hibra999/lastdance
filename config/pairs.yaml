@@ -1,0 +1,14 @@
+# Exact symbols and regular expressions are applied after Bitso market discovery.
+manual_exclusions:
+  - pair: EUR/USD
+    reason: Fiat/fiat market, not a crypto spot asset.
+
+blacklist_patterns:
+  - pattern: ".*(BULL|BEAR|UP|DOWN)/.*"
+    reason: NFI recommendation against leveraged tokens.
+  - pattern: ".*(3L|3S|5L|5S)/.*"
+    reason: Common leveraged-token suffix.
+
+nfi_blacklist_sources:
+  - third_party/NostalgiaForInfinity/configs/blacklist-binance.json
+  - third_party/NostalgiaForInfinity/configs/blacklist-kraken.json

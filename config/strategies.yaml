@@ -1,0 +1,96 @@
+upstream:
+  repository: https://github.com/iterativv/NostalgiaForInfinity.git
+  release: v17.5.40
+  commit: ad5b4b98b52cd72932dd11e464fb8ede3663050c
+
+strategies:
+  NostalgiaForInfinityX7:
+    enabled: true
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX7.py
+    compatibility: supported
+    reason: Current strategy selected by the upstream recommended_config.json.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: current
+  NostalgiaForInfinityX6:
+    enabled: true
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX6.py
+    compatibility: supported
+    reason: Maintained previous generation retained for comparative research.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: maintained
+  NostalgiaForInfinityX5:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX5.py
+    compatibility: importable
+    reason_disabled: Superseded generation; not selected by the current upstream recommended configuration.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: obsolete
+  NostalgiaForInfinityX4:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX4.py
+    compatibility: importable
+    reason_disabled: Superseded generation retained upstream for historical comparison.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: obsolete
+  NostalgiaForInfinityX3:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX3.py
+    compatibility: importable
+    reason_disabled: Superseded generation retained upstream for historical comparison.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: obsolete
+  NostalgiaForInfinityX2:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX2.py
+    compatibility: importable
+    reason_disabled: Superseded generation retained upstream for historical comparison.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 800
+    generation: obsolete
+  NostalgiaForInfinityX:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/NostalgiaForInfinityX.py
+    compatibility: importable
+    reason_disabled: Oldest X generation; current upstream recommends X7.
+    accelerated: false
+    tested: true
+    timeframe: 5m
+    startup_candles: 480
+    generation: obsolete
+  NostalgiaForInfinityNext:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/legacy/NostalgiaForInfinityNext.py
+    compatibility: legacy
+    reason_disabled: Explicitly stored in the upstream legacy directory.
+    accelerated: false
+    tested: false
+    timeframe: 5m
+    startup_candles: 480
+    generation: legacy
+  NostalgiaForInfinityNextGen:
+    enabled: false
+    source: third_party/NostalgiaForInfinity/legacy/NostalgiaForInfinityNextGen.py
+    compatibility: legacy
+    reason_disabled: Explicitly stored in the upstream legacy directory and uses a historical 15m design.
+    accelerated: false
+    tested: false
+    timeframe: 15m
+    startup_candles: 480
+    generation: legacy

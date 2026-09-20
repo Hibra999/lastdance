@@ -1,0 +1,50 @@
+exchange:
+  name: bitso
+  quote_currency: USD
+  trading_mode: spot
+
+pairs:
+  mode: all_eligible
+  min_history_days: 14
+  require_active: true
+  require_spot: true
+  evaluate_ticker_liquidity: false
+  manual_exclusions: config/pairs.yaml
+
+strategies:
+  registry: config/strategies.yaml
+  upstream_path: third_party/NostalgiaForInfinity
+
+data:
+  source: bitso
+  proxy_market_data: false
+  # 2021 is the earliest date empirically observed for BTC/USD via CCXT.
+  history_start: "2021-01-01"
+  timeframes: [5m, 15m, 1h, 4h, 1d]
+  cache_dir: user_data/data
+
+backtest:
+  timerange: maximum
+  update_data: true
+  max_parallel: auto
+  stake_amount: unlimited
+  max_open_trades: 8
+  export_trades: true
+
+acceleration:
+  mode: auto
+  min_gpu_elements: 1000000
+  numeric_rtol: 1.0e-10
+  numeric_atol: 1.0e-12
+
+report:
+  consolidated_html: true
+  output: reports/latest/report.html
+
+telegram:
+  enabled: false
+
+trading:
+  dry_run: true
+  live_enabled: false
+  require_environment_gate: true
