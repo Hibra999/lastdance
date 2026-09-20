@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-09-16T22:00:00-06:00",
+  "python": "3.13",
+  "freqtrade": {
+    "version": "2026.8",
+    "repository": "https://github.com/freqtrade/freqtrade",
+    "commit": "9f10e357a93c1dcf10c2a2b367659214d89c073e"
+  },
+  "nostalgia_for_infinity": {
+    "version": "v17.5.40",
+    "repository": "https://github.com/iterativv/NostalgiaForInfinity",
+    "commit": "ad5b4b98b52cd72932dd11e464fb8ede3663050c"
+  },
+  "quantstats": {
+    "version": "0.0.81",
+    "repository": "https://github.com/ranaroussi/quantstats",
+    "commit": "fbd10daed0227aa0d10da6513f1b15e7e98d7fae"
+  },
+  "ccxt": {"version": "4.5.78"},
+  "ta_lib": {"version": "0.7.1"},
+  "cupy_cuda13x": {"version": "14.2.0"}
+}

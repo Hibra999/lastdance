@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lastdance"
+version = "0.1.0"
+description = "Reproducible Bitso/NostalgiaForInfinity research orchestration on Freqtrade"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "GPL-3.0-or-later"
+dependencies = [
+  "freqtrade==2026.8",
+  "ccxt==4.5.78",
+  "quantstats==0.0.81",
+  "TA-Lib==0.7.1",
+  "PyYAML>=6.0.2,<7",
+  "python-dotenv>=1.1,<2",
+  "psutil>=7,<8",
+  "jinja2>=3.1,<4",
+]
+
+[project.optional-dependencies]
+gpu = ["cupy-cuda13x[ctk]==14.2.0"]
+dev = ["pytest>=8.4,<10", "pytest-cov>=6.2,<8", "detect-secrets>=1.5,<2", "ruff>=0.12"]
+
+[project.scripts]
+lastdance = "lastdance.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["lastdance*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+  "integration: uses installed upstream packages or public network access",
+  "slow: takes longer than a unit test",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
