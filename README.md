@@ -117,9 +117,9 @@ conda run -n lastdance python scripts/scan_secrets.py
 conda run -n lastdance python -m lastdance doctor
 conda run -n lastdance python -m lastdance pairs --validate-history
 conda run -n lastdance python -m lastdance strategies --freqtrade
-conda run -n lastdance python -m lastdance data --days 45 --pairs BTC/USD
+conda run -n lastdance python -m lastdance data --days 180 --pairs BTC/USD DOGE/USD SOL/USD
 conda run -n lastdance python -m lastdance benchmark
-conda run -n lastdance python -m lastdance backtest --days 14 --pairs BTC/USD
+conda run -n lastdance python -m lastdance backtest --days 180 --pairs BTC/USD DOGE/USD SOL/USD
 conda run -n lastdance python -m lastdance report --open
 conda run -n lastdance python -m lastdance verify-bitso
 conda run -n lastdance python -m lastdance dry-run
@@ -187,6 +187,8 @@ strategies:
 
 Primary data comes from Bitso through Freqtrade/CCXT. Required NFI timeframes are `5m`, `15m`, `1h`, `4h`, and `1d`. Freqtrade stores Feather files under `user_data/data` and reuses them on later runs.
 
+Downloads expand each timeframe independently by NFI's 800 startup candles, prepend missing history, retry one transient exchange failure, and then update to the latest closed candle. Bitso's shifted duplicate daily timestamps are canonicalized only when their OHLCV values are identical; conflicting candles fail instead of being guessed.
+
 `lastdance.data.alpaca` provides an authenticated alternative for equivalent USD crypto symbols. Alpaca records always contain:
 
 ```text
@@ -206,10 +208,11 @@ Each run stores:
 - LastDance and NFI Git revisions.
 - Python, OS, Freqtrade, CCXT, QuantStats, and TA-Lib versions.
 - Pairs, strategies, timerange, timeframes, workers, and acceleration mode.
-- Per-file candle provenance and first/last timestamps.
-- Per-strategy status, runtime, log, and Freqtrade export.
+- Per-file SHA-256, candle provenance, first/last timestamps, gaps, alignment, and warm-up proof.
+- Requested, accepted, and excluded pairs with reasons.
+- Per-strategy status (`success`, `no_trades`, `invalid_data`, `invalid_result`, or `failed`), runtime, log, and Freqtrade export.
 
-A validated smoke run used real Bitso `BTC/USD` candles from 2026-09-03 through 2026-09-17. X6 and X7 completed successfully with zero trades. Zero trades is a valid result for that short market window, not an execution failure.
+A validated 180-day run used real Bitso `BTC/USD`, `DOGE/USD`, and `SOL/USD` candles with complete 800-candle warm-up on every timeframe. X6 produced 2 trades and $27.21 profit; X7 produced 1 trade and $28.75 profit from a $10,000 starting wallet. Both final balances reconciled exactly. A valid zero-trade run is reported as `no_trades`, never as a successful performance result.
 
 ## CUDA and performance
 
@@ -234,7 +237,7 @@ The NVIDIA driver exposed CUDA 13.3 compatibility and CuPy used its packaged CUD
 
 ## QuantStats report
 
-LastDance generates one self-contained report at `reports/latest/report.html`. It compares strategies and includes total return, CAGR when meaningful, Sharpe, Sortino, Calmar, volatility, maximum drawdown, win rate, profit factor, trade statistics, exposure, duration, pairs, provenance, and reproducibility metadata. Failed and zero-trade strategies remain visible.
+LastDance generates one self-contained report at `reports/latest/report.html`. Portfolio returns come from Freqtrade's mark-to-market wallet curve, are sampled on a complete daily calendar, and reconcile to the exported final balance. Crypto risk statistics use 365 periods per year. The report embeds the native QuantStats tear sheet for every strategy with non-zero returns, includes a Bitso BTC/USD benchmark, and displays data-integrity evidence and full reproducibility metadata. Failed, invalid-data, invalid-export, and zero-trade strategies remain visible without fabricated ratios.
 
 ## Telegram
 

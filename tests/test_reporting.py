@@ -3,46 +3,119 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from lastdance.reporting.consolidated import generate_report
+import pandas as pd
+import pytest
+
+from lastdance.reporting import consolidated
+from lastdance.reporting.consolidated import _portfolio_returns, generate_report
 
 
-def test_consolidated_report_generation(tmp_path: Path) -> None:
-    export = tmp_path / "Example.json"
-    export.write_text(
-        json.dumps(
+def _result() -> dict[str, object]:
+    return {
+        "trades": [
             {
-                "strategy": {
-                    "Example": {
-                        "trades": [
-                            {
-                                "pair": "BTC/USD",
-                                "close_date": "2026-01-02T00:00:00Z",
-                                "profit_ratio": 0.02,
-                            },
-                            {
-                                "pair": "BTC/USD",
-                                "close_date": "2026-01-03T00:00:00Z",
-                                "profit_ratio": -0.01,
-                            },
-                        ]
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
+                "pair": "BTC/USD",
+                "close_date": "2026-01-02T12:00:00Z",
+                "profit_abs": 100.0,
+                "profit_ratio": 0.02,
+                "trade_duration": 60,
+            },
+            {
+                "pair": "BTC/USD",
+                "close_date": "2026-01-04T12:00:00Z",
+                "profit_abs": -50.0,
+                "profit_ratio": -0.01,
+                "trade_duration": 120,
+            },
+        ],
+        "starting_balance": 10_000.0,
+        "final_balance": 10_050.0,
+        "profit_total_abs": 50.0,
+        "profit_mean": 0.005,
+        "profit_factor": 2.0,
+        "winrate": 0.5,
+        "backtest_start": "2026-01-01 00:00:00",
+        "backtest_end": "2026-01-05 00:00:00",
+        "backtest_days": 4,
+        "market_change": 0.03,
+        "pairlist": ["BTC/USD"],
+    }
+
+
+def test_portfolio_returns_use_absolute_pnl_and_include_idle_days() -> None:
+    returns, balances = _portfolio_returns(_result())
+    assert len(returns) == 5
+    assert returns.iloc[0] == 0.0
+    assert returns.iloc[1] == 0.01
+    assert returns.iloc[2] == 0.0
+    assert returns.iloc[3] == -50 / 10_100
+    assert balances["reconciliation_difference"] == 0.0
+
+
+def test_portfolio_returns_prefer_freqtrade_mark_to_market_wallet() -> None:
+    result = _result()
+    wallet = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2026-01-01T23:55:00Z", "2026-01-02T23:55:00Z", "2026-01-05T00:00:00Z"]
+            ),
+            "total_quote": [10_000.0, 9_900.0, 10_050.0],
+        }
     )
+    returns, balances = _portfolio_returns(result, wallet)
+    assert returns.iloc[1] == pytest.approx(-0.01)
+    assert returns.iloc[-1] == pytest.approx(10_050 / 9_900 - 1)
+    assert balances["return_method"] == "freqtrade_wallet_mark_to_market"
+    assert balances["reconciliation_difference"] == 0.0
+
+
+def test_consolidated_report_generation(tmp_path: Path, monkeypatch) -> None:
+    export = tmp_path / "Example.json"
+    export.write_text(json.dumps({"strategy": {"Example": _result()}}), encoding="utf-8")
     metadata = {
-        "timerange": "20260101-20260201",
+        "timerange": "20260101-20260105",
         "data_source": "bitso",
+        "pairs": ["BTC/USD"],
+        "pairs_excluded": [],
+        "startup_candles_required": 800,
+        "data_inventory": [],
         "outcomes": [
             {"strategy": "Example", "status": "success", "runtime_seconds": 1.2, "exports": [str(export)]}
         ],
     }
     (tmp_path / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(consolidated, "_quantstats_report", lambda *_: "<html>QuantStats native</html>")
     output = generate_report(tmp_path, tmp_path / "report.html")
     text = output.read_text(encoding="utf-8")
-    assert "Global comparison" in text
-    assert "Example" in text
-    assert "CAGR" in text
-    assert "Exposure" in text
-    assert "data:image/png;base64" in text
+    assert "Comparación global" in text
+    assert "Integridad de datos" in text
+    assert "QuantStats · tear sheet completo" in text
+    assert "QuantStats native" in text
+    assert "$10,050.00" in text
+
+
+def test_metadata_json_is_not_accepted_as_a_zero_trade_result(tmp_path: Path) -> None:
+    export = tmp_path / "backtest.meta.json"
+    export.write_text(json.dumps({"notes": "not a result"}), encoding="utf-8")
+    metadata = {
+        "timerange": "20260101-20260105",
+        "data_source": "bitso",
+        "pairs": [],
+        "data_inventory": [],
+        "outcomes": [
+            {"strategy": "Example", "status": "success", "runtime_seconds": 1.2, "exports": [str(export)]}
+        ],
+    }
+    (tmp_path / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    text = generate_report(tmp_path, tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "export inválido" in text
+    assert "El archivo no contiene resultados" in text
+
+
+def test_zero_trade_returns_cover_full_backtest_calendar() -> None:
+    result = _result()
+    result["trades"] = []
+    result["final_balance"] = 10_000.0
+    result["profit_total_abs"] = 0.0
+    returns, _ = _portfolio_returns(result)
+    assert returns.equals(pd.Series(0.0, index=pd.date_range("2026-01-01", "2026-01-05")))

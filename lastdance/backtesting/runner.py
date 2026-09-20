@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import json
 import os
 import platform
 import subprocess
 import sys
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import psutil
 
 from lastdance.config import load_app_config
 from lastdance.data.downloader import run_freqtrade
+from lastdance.data.normalize import cache_file, inspect_cache_file
 from lastdance.exchanges.freqtrade_config import build_runtime_config, write_runtime_config
 from lastdance.paths import NFI_ROOT, PROJECT_ROOT, RESULTS_DIR, USER_DATA_DIR
 from lastdance.strategies.registry import StrategyRegistry
@@ -68,44 +70,84 @@ def run_one(
     candidates = sorted(
         strategy_dir.glob("backtest-result-*"), key=lambda item: item.stat().st_mtime, reverse=True
     )
-    exports = [str(item) for item in candidates if item.suffix.lower() in {".json", ".zip"}]
+    exports = [
+        str(item)
+        for item in candidates
+        if item.suffix.lower() == ".zip"
+        or (item.suffix.lower() == ".json" and not item.name.endswith(".meta.json"))
+    ]
+    status = "failed"
+    if result["returncode"] == 0:
+        try:
+            trade_count = _export_trade_count(next(Path(item) for item in exports), strategy)
+            status = "success" if trade_count else "no_trades"
+        except (
+            OSError,
+            StopIteration,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+            zipfile.BadZipFile,
+        ) as exc:
+            status = "invalid_result"
+            result["output"] += f"\nInvalid export: {exc}"
     return {
         "strategy": strategy,
-        "status": "success" if result["returncode"] == 0 else "failed",
+        "status": status,
         "returncode": result["returncode"],
         "runtime_seconds": result["runtime_seconds"],
         "exports": exports,
         "log": str(log_path),
-        "error_tail": result["output"][-2000:] if result["returncode"] else "",
+        "error_tail": result["output"][-2000:] if status not in {"success", "no_trades"} else "",
     }
 
 
-def _data_inventory(pairs: list[str], timeframes: list[str]) -> list[dict[str, Any]]:
+def _export_trade_count(path: Path, strategy: str) -> int:
+    if path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            names = [
+                name
+                for name in archive.namelist()
+                if name.endswith(".json") and "config" not in name and "meta" not in name
+            ]
+            if not names:
+                raise ValueError("export contains no result JSON")
+            payload = json.loads(archive.read(names[0]))
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    result = payload.get("strategy", {}).get(strategy)
+    if not isinstance(result, dict) or "trades" not in result:
+        raise ValueError("export has no strategy result")
+    return len(result["trades"])
+
+
+def _timerange_start(timerange: str) -> datetime:
+    start = timerange.partition("-")[0]
+    if len(start) != 8:
+        raise ValueError(f"Timerange must begin with YYYYMMDD: {timerange}")
+    return datetime.strptime(start, "%Y%m%d").replace(tzinfo=UTC)
+
+
+def _data_inventory(
+    pairs: list[str], timeframes: list[str], *, backtest_start: datetime, startup_candles: int
+) -> list[dict[str, Any]]:
     inventory: list[dict[str, Any]] = []
     data_dir = USER_DATA_DIR / "data"
     for pair in pairs:
-        stem = pair.replace("/", "_").replace(":", "_")
         for timeframe in timeframes:
-            path = data_dir / f"{stem}-{timeframe}.feather"
-            item: dict[str, Any] = {
+            path = cache_file(data_dir, pair, timeframe)
+            item = {
                 "data_source": "bitso",
                 "exchange_reference": "bitso",
                 "proxy_market_data": False,
                 "pair": pair,
-                "timeframe": timeframe,
-                "path": str(path),
+                **inspect_cache_file(
+                    path,
+                    timeframe,
+                    backtest_start=backtest_start,
+                    startup_candles=startup_candles,
+                ),
             }
-            if path.is_file():
-                frame = pd.read_feather(path, columns=["date"])
-                item.update(
-                    {
-                        "candles": len(frame),
-                        "first_candle": frame["date"].min().isoformat() if not frame.empty else None,
-                        "last_candle": frame["date"].max().isoformat() if not frame.empty else None,
-                    }
-                )
-            else:
-                item.update({"candles": 0, "first_candle": None, "last_candle": None})
             inventory.append(item)
     return inventory
 
@@ -117,39 +159,76 @@ def run_backtests(
     strategy_names: list[str] | None = None,
     workers: int | None = None,
     run_id: str | None = None,
+    pair_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     app = load_app_config()
     registry = StrategyRegistry(app["strategies"]["registry"])
     strategies = strategy_names or [item.name for item in registry.enabled()]
-    for name in strategies:
-        registry.get(name)
+    specs = [registry.get(name) for name in strategies]
+    startup_candles = max((item.startup_candles for item in specs), default=0)
+    timeframes = list(app["data"]["timeframes"])
+    inventory = _data_inventory(
+        pairs,
+        timeframes,
+        backtest_start=_timerange_start(timerange),
+        startup_candles=startup_candles,
+    )
+    pair_issues = {
+        pair: sorted(
+            {
+                f"{item['timeframe']}:{issue}"
+                for item in inventory
+                if item["pair"] == pair
+                for issue in item["issues"]
+            }
+        )
+        for pair in pairs
+    }
+    pairs_used = [pair for pair in pairs if not pair_issues[pair]]
+    pairs_excluded = [
+        {"pair": pair, "reasons": reasons} for pair, reasons in pair_issues.items() if reasons
+    ]
     run_id = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     run_dir = RESULTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     runtime_config = write_runtime_config(
         run_dir / "freqtrade.runtime.json",
-        build_runtime_config(pairs, strategy=strategies[0] if strategies else None),
+        build_runtime_config(pairs_used or pairs, strategy=strategies[0] if strategies else None),
     )
     selected_workers = workers or auto_workers(len(strategies))
     outcomes: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(
-        max_workers=selected_workers, thread_name_prefix="lastdance-backtest"
-    ) as executor:
-        futures = {
-            executor.submit(run_one, strategy, runtime_config, timerange, run_dir): strategy
+    if not pairs_used:
+        outcomes = [
+            {
+                "strategy": strategy,
+                "status": "invalid_data",
+                "returncode": None,
+                "runtime_seconds": 0.0,
+                "exports": [],
+                "log": None,
+                "error_tail": "No pair passed the OHLCV integrity and startup-candle gate.",
+            }
             for strategy in strategies
-        }
-        for future in as_completed(futures):
-            try:
-                outcomes.append(future.result())
-            except Exception as exc:
-                outcomes.append(
-                    {
-                        "strategy": futures[future],
-                        "status": "failed",
-                        "error_tail": f"{exc.__class__.__name__}: {exc}",
-                    }
-                )
+        ]
+    else:
+        with ThreadPoolExecutor(
+            max_workers=selected_workers, thread_name_prefix="lastdance-backtest"
+        ) as executor:
+            futures = {
+                executor.submit(run_one, strategy, runtime_config, timerange, run_dir): strategy
+                for strategy in strategies
+            }
+            for future in as_completed(futures):
+                try:
+                    outcomes.append(future.result())
+                except Exception as exc:
+                    outcomes.append(
+                        {
+                            "strategy": futures[future],
+                            "status": "failed",
+                            "error_tail": f"{exc.__class__.__name__}: {exc}",
+                        }
+                    )
     packages = {}
     for package in ("freqtrade", "ccxt", "quantstats", "TA-Lib"):
         try:
@@ -168,9 +247,13 @@ def run_backtests(
         "exchange_reference": app["exchange"]["name"],
         "proxy_market_data": bool(app["data"].get("proxy_market_data", False)),
         "timerange": timerange,
-        "timeframes": app["data"]["timeframes"],
-        "data_inventory": _data_inventory(pairs, list(app["data"]["timeframes"])),
-        "pairs": pairs,
+        "timeframes": timeframes,
+        "startup_candles_required": startup_candles,
+        "data_inventory": inventory,
+        "pairs_requested": pairs,
+        "pairs": pairs_used,
+        "pairs_excluded": pairs_excluded,
+        "pair_snapshot": pair_snapshot,
         "strategies": strategies,
         "acceleration_mode": app["acceleration"]["mode"],
         "cpu_workers": selected_workers,

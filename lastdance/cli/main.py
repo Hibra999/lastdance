@@ -112,6 +112,9 @@ def command_strategies(args: argparse.Namespace) -> int:
 
 def command_data(args: argparse.Namespace) -> int:
     app = load_app_config()
+    startup_candles = max(
+        (item.startup_candles for item in StrategyRegistry().enabled()), default=0
+    )
     pairs, snapshot = _load_or_discover_pairs(validate_history=args.validate_history)
     if args.pairs:
         pairs = args.pairs
@@ -121,6 +124,7 @@ def command_data(args: argparse.Namespace) -> int:
         pairs,
         args.timeframes or list(app["data"]["timeframes"]),
         _timerange(args.days),
+        startup_candles=startup_candles,
         log_path=RESULTS_DIR / "runtime" / "download.log",
     )
     result["pairs"] = pairs
@@ -130,7 +134,7 @@ def command_data(args: argparse.Namespace) -> int:
 
 
 def command_backtest(args: argparse.Namespace) -> int:
-    pairs, _ = _load_or_discover_pairs()
+    pairs, snapshot = _load_or_discover_pairs()
     if args.pairs:
         pairs = args.pairs
     result = run_backtests(
@@ -138,9 +142,10 @@ def command_backtest(args: argparse.Namespace) -> int:
         timerange=args.timerange or _timerange(args.days),
         strategy_names=args.strategies,
         workers=args.workers,
+        pair_snapshot=snapshot,
     )
     _print(result)
-    return 0 if any(item["status"] == "success" for item in result["outcomes"]) else 1
+    return 0 if any(item["status"] in {"success", "no_trades"} for item in result["outcomes"]) else 1
 
 
 def command_report(args: argparse.Namespace) -> int:
@@ -197,12 +202,20 @@ def command_all(args: argparse.Namespace) -> int:
         pairs,
         list(app["data"]["timeframes"]),
         _timerange(days),
+        startup_candles=max(
+            (item.startup_candles for item in StrategyRegistry().enabled()), default=0
+        ),
         log_path=RESULTS_DIR / "runtime" / "download.log",
     )
     if download["returncode"]:
         _print({"stage": "download", **download})
         return download["returncode"]
-    run = run_backtests(pairs, timerange=_timerange(days), strategy_names=strategies)
+    run = run_backtests(
+        pairs,
+        timerange=_timerange(days),
+        strategy_names=strategies,
+        pair_snapshot=snapshot,
+    )
     run_dir = RESULTS_DIR / run["run_id"]
     report = generate_report(run_dir)
     summary = {
@@ -215,7 +228,7 @@ def command_all(args: argparse.Namespace) -> int:
     _print(summary)
     if args.open:
         webbrowser.open(report.as_uri())
-    return 0 if any(item["status"] == "success" for item in run["outcomes"]) else 1
+    return 0 if any(item["status"] in {"success", "no_trades"} for item in run["outcomes"]) else 1
 
 
 def command_dry_run(args: argparse.Namespace) -> int:
