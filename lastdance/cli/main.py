@@ -13,7 +13,12 @@ from dotenv import load_dotenv
 from lastdance.acceleration.backend import benchmark_dict
 from lastdance.backtesting.runner import run_backtests
 from lastdance.config import load_app_config
-from lastdance.data.downloader import download_bitso_data, run_freqtrade
+from lastdance.data.downloader import (
+    configured_data_dir,
+    download_alpaca_data,
+    download_bitso_data,
+    run_freqtrade,
+)
 from lastdance.doctor import run_doctor
 from lastdance.exchanges.bitso import discover_usd_universe, verify_account_read_only
 from lastdance.exchanges.freqtrade_config import build_runtime_config, write_runtime_config
@@ -21,6 +26,7 @@ from lastdance.paths import NFI_ROOT, PROJECT_ROOT, RESULTS_DIR
 from lastdance.reporting.consolidated import generate_report, latest_run_dir
 from lastdance.strategies.compatibility import inspect_registry
 from lastdance.strategies.registry import StrategyRegistry
+from lastdance.strategies.runtime_patch import prepare_strategy_path
 from lastdance.utils.jsonio import read_json, write_json
 
 
@@ -59,6 +65,32 @@ def _timerange(days: int | None = None) -> str:
         return f"{start:%Y%m%d}-"
     app = load_app_config()
     return f"{app['data']['history_start'].replace('-', '')}-"
+
+
+def _data_pairs(app: dict[str, Any], discovered: list[str]) -> list[str]:
+    return list(app["data"].get("pairs", discovered))
+
+
+def _download_data(
+    app: dict[str, Any], pairs: list[str], timeframes: list[str], timerange: str, startup_candles: int
+) -> dict[str, Any]:
+    if app["data"]["source"] == "alpaca":
+        return download_alpaca_data(
+            pairs,
+            timeframes,
+            timerange,
+            startup_candles=startup_candles,
+            data_dir=configured_data_dir(app),
+        )
+    runtime = write_runtime_config(RESULTS_DIR / "runtime" / "download.json", build_runtime_config(pairs))
+    return download_bitso_data(
+        runtime,
+        pairs,
+        timeframes,
+        timerange,
+        startup_candles=startup_candles,
+        log_path=RESULTS_DIR / "runtime" / "download.log",
+    )
 
 
 def command_doctor(args: argparse.Namespace) -> int:
@@ -116,16 +148,13 @@ def command_data(args: argparse.Namespace) -> int:
         (item.startup_candles for item in StrategyRegistry().enabled()), default=0
     )
     pairs, snapshot = _load_or_discover_pairs(validate_history=args.validate_history)
-    if args.pairs:
-        pairs = args.pairs
-    runtime = write_runtime_config(RESULTS_DIR / "runtime" / "download.json", build_runtime_config(pairs))
-    result = download_bitso_data(
-        runtime,
+    pairs = args.pairs or _data_pairs(app, pairs)
+    result = _download_data(
+        app,
         pairs,
         args.timeframes or list(app["data"]["timeframes"]),
         _timerange(args.days),
-        startup_candles=startup_candles,
-        log_path=RESULTS_DIR / "runtime" / "download.log",
+        startup_candles,
     )
     result["pairs"] = pairs
     result["snapshot_generated_at"] = snapshot.get("generated_at")
@@ -134,9 +163,9 @@ def command_data(args: argparse.Namespace) -> int:
 
 
 def command_backtest(args: argparse.Namespace) -> int:
+    app = load_app_config()
     pairs, snapshot = _load_or_discover_pairs()
-    if args.pairs:
-        pairs = args.pairs
+    pairs = args.pairs or _data_pairs(app, pairs)
     result = run_backtests(
         pairs,
         timerange=args.timerange or _timerange(args.days),
@@ -187,7 +216,7 @@ def command_all(args: argparse.Namespace) -> int:
         min_history_days=int(app["pairs"]["min_history_days"]),
     )
     _save_snapshot(snapshot)
-    pairs = snapshot["pairs_used"]
+    pairs = _data_pairs(app, snapshot["pairs_used"])
     strategies = None
     days = None
     if args.smoke:
@@ -196,16 +225,12 @@ def command_all(args: argparse.Namespace) -> int:
         days = args.days or 45
     benchmark_result = benchmark_dict(mode=app["acceleration"]["mode"], elements=args.elements)
     write_json(RESULTS_DIR / "benchmarks" / "latest.json", benchmark_result)
-    runtime = write_runtime_config(RESULTS_DIR / "runtime" / "all.json", build_runtime_config(pairs))
-    download = download_bitso_data(
-        runtime,
+    download = _download_data(
+        app,
         pairs,
         list(app["data"]["timeframes"]),
         _timerange(days),
-        startup_candles=max(
-            (item.startup_candles for item in StrategyRegistry().enabled()), default=0
-        ),
-        log_path=RESULTS_DIR / "runtime" / "download.log",
+        max((item.startup_candles for item in StrategyRegistry().enabled()), default=0),
     )
     if download["returncode"]:
         _print({"stage": "download", **download})
@@ -234,6 +259,8 @@ def command_all(args: argparse.Namespace) -> int:
 def command_dry_run(args: argparse.Namespace) -> int:
     pairs, _ = _load_or_discover_pairs()
     strategy = args.strategy or StrategyRegistry().enabled()[0].name
+    spec = StrategyRegistry().get(strategy)
+    strategy_path = prepare_strategy_path(spec.name, spec.source)
     runtime = write_runtime_config(
         RESULTS_DIR / "runtime" / "dry-run.json", build_runtime_config(pairs, strategy=strategy, dry_run=True)
     )
@@ -243,7 +270,15 @@ def command_dry_run(args: argparse.Namespace) -> int:
         )
         return 0
     result = run_freqtrade(
-        ["trade", "--config", str(runtime), "--strategy-path", str(NFI_ROOT), "--strategy", strategy],
+        [
+            "trade",
+            "--config",
+            str(runtime),
+            "--strategy-path",
+            str(strategy_path),
+            "--strategy",
+            strategy,
+        ],
         log_path=PROJECT_ROOT / "logs" / "dry-run.log",
     )
     return result["returncode"]

@@ -16,12 +16,15 @@ strategies:
   upstream_path: third_party/NostalgiaForInfinity
 
 data:
-  source: bitso
-  proxy_market_data: false
-  # 2021 is the earliest date empirically observed for BTC/USD via CCXT.
-  history_start: "2021-01-01"
+  source: alpaca
+  proxy_market_data: true
+  requested_history_start: "2020-01-01"
+  # Alpaca Crypto US starts on 2021-01-01; 800 daily startup candles make this
+  # the first common signal date that preserves NFI's unmodified warm-up.
+  history_start: "2023-03-12"
+  pairs: [BTC/USD, DOGE/USD, SOL/USD]
   timeframes: [5m, 15m, 1h, 4h, 1d]
-  cache_dir: user_data/data
+  cache_dir: user_data/data/alpaca
 
 backtest:
   timerange: maximum

@@ -1,0 +1,63 @@
+diff --git a/NostalgiaForInfinityX5.py b/NostalgiaForInfinityX5.py
+index ac9354394..5b275f401 100644
+--- a/NostalgiaForInfinityX5.py
++++ b/NostalgiaForInfinityX5.py
+@@ -10128,8 +10128,8 @@ class NostalgiaForInfinityX5(IStrategy):
+     short_entry_conditions = []
+ 
+     df.loc[:, "enter_tag"] = ""
+-    df.loc[:, "enter_long"] = ""
+-    df.loc[:, "enter_short"] = ""
++    df.loc[:, "enter_long"] = 0
++    df.loc[:, "enter_short"] = 0
+ 
+     is_backtest = self.dp.runmode.value in ["backtest", "hyperopt", "plot"]
+     # the number of free slots
+@@ -14183,10 +14183,10 @@ class NostalgiaForInfinityX5(IStrategy):
+         item_long_entry = reduce(lambda x, y: x & y, long_entry_logic)
+         df.loc[item_long_entry, "enter_tag"] += f"{long_entry_condition_index} "
+         long_entry_conditions.append(item_long_entry)
+-        df.loc[:, "enter_long"] = item_long_entry
++        df.loc[:, "enter_long"] = item_long_entry.astype(int)
+ 
+     if long_entry_conditions:
+-      df.loc[:, "enter_long"] = reduce(lambda x, y: x | y, long_entry_conditions)
++      df.loc[:, "enter_long"] = reduce(lambda x, y: x | y, long_entry_conditions).astype(int)
+ 
+     ###############################################################################################
+ 
+@@ -15823,10 +15823,10 @@ class NostalgiaForInfinityX5(IStrategy):
+         item_short_entry = reduce(lambda x, y: x & y, short_entry_logic)
+         df.loc[item_short_entry, "enter_tag"] += f"{short_entry_condition_index} "
+         short_entry_conditions.append(item_short_entry)
+-        df.loc[:, "enter_short"] = item_short_entry
++        df.loc[:, "enter_short"] = item_short_entry.astype(int)
+ 
+     if short_entry_conditions:
+-      df.loc[:, "enter_short"] = reduce(lambda x, y: x | y, short_entry_conditions)
++      df.loc[:, "enter_short"] = reduce(lambda x, y: x | y, short_entry_conditions).astype(int)
+ 
+     return df
+ 
+diff --git a/legacy/NostalgiaForInfinityNext.py b/legacy/NostalgiaForInfinityNext.py
+index 958e22909..5d31a4efa 100644
+--- a/legacy/NostalgiaForInfinityNext.py
++++ b/legacy/NostalgiaForInfinityNext.py
+@@ -6330,7 +6330,7 @@ def pmax(df, period, multiplier, length, MAtype, src):
+   pm = Series(pm_arr)
+ 
+   # Mark the trend direction up/down
+-  pmx = np.where((pm_arr > 0.00), np.where((mavalue < pm_arr), "down", "up"), np.NaN)
++  pmx = np.where((pm_arr > 0.00), np.where((mavalue < pm_arr), "down", "up"), None)
+ 
+   return pm, pmx
+ 
+@@ -6361,7 +6361,7 @@ def SSLChannels(dataframe, length=7):
+   ATR = ta.ATR(dataframe, timeperiod=14)
+   smaHigh = dataframe["high"].rolling(length).mean() + ATR
+   smaLow = dataframe["low"].rolling(length).mean() - ATR
+-  hlv = Series(np.where(dataframe["close"] > smaHigh, 1, np.where(dataframe["close"] < smaLow, -1, np.NAN)))
++  hlv = Series(np.where(dataframe["close"] > smaHigh, 1, np.where(dataframe["close"] < smaLow, -1, np.nan)))
+   hlv = hlv.ffill()
+   sslDown = np.where(hlv < 0, smaHigh, smaLow)
+   sslUp = np.where(hlv < 0, smaLow, smaHigh)

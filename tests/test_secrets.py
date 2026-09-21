@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from lastdance.exchanges.freqtrade_config import build_runtime_config, write_runtime_config
+from lastdance.exchanges.freqtrade_config import (
+    build_runtime_config,
+    freqtrade_environment,
+    write_runtime_config,
+)
 from lastdance.utils.secrets import redact, scan_text
 
 
@@ -34,3 +38,12 @@ def test_live_trading_requires_two_gates(monkeypatch) -> None:
     monkeypatch.delenv("LASTDANCE_LIVE_ACK", raising=False)
     with pytest.raises(RuntimeError):
         build_runtime_config(["BTC/USD"], dry_run=False)
+
+
+def test_telegram_enables_only_when_both_credentials_exist(monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat")
+    environment = freqtrade_environment()
+    assert environment["FREQTRADE__TELEGRAM__ENABLED"] == "true"
+    assert environment["FREQTRADE__TELEGRAM__TOKEN"] == "test-token"
+    assert environment["FREQTRADE__TELEGRAM__CHAT_ID"] == "test-chat"

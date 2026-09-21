@@ -58,6 +58,8 @@ def freqtrade_environment() -> dict[str, str]:
     for source, target in mappings.items():
         if env.get(source):
             env[target] = env[source]
+    if env.get("FREQTRADE__TELEGRAM__TOKEN") and env.get("FREQTRADE__TELEGRAM__CHAT_ID"):
+        env.setdefault("FREQTRADE__TELEGRAM__ENABLED", "true")
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("NUMEXPR_MAX_THREADS", "16")
     return env

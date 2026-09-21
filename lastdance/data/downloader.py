@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -8,9 +9,10 @@ from typing import Any
 
 import pandas as pd
 
+from lastdance.data.alpaca import fetch_crypto_bars
 from lastdance.data.normalize import cache_file, normalize_cache_file, timeframe_delta
 from lastdance.exchanges.freqtrade_config import freqtrade_environment
-from lastdance.paths import PROJECT_ROOT, USER_DATA_DIR
+from lastdance.paths import PROJECT_ROOT, USER_DATA_DIR, resolve_project_path
 
 
 def run_freqtrade(
@@ -134,4 +136,121 @@ def download_bitso_data(
         "runtime_seconds": (datetime.now(UTC) - started).total_seconds(),
         "normalization": normalized,
         "output_tail": output[-4000:],
+    }
+
+
+def configured_data_dir(app: dict[str, Any]) -> Path:
+    return resolve_project_path(app["data"].get("cache_dir", USER_DATA_DIR / "data"))
+
+
+def download_alpaca_data(
+    pairs: list[str],
+    timeframes: list[str],
+    timerange: str,
+    *,
+    startup_candles: int = 800,
+    data_dir: Path,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Update a dedicated Alpaca cache without re-downloading covered history."""
+    start_text, separator, _ = timerange.partition("-")
+    if not separator or len(start_text) != 8:
+        raise ValueError(f"Unsupported timerange: {timerange}")
+    backtest_start = pd.Timestamp(datetime.strptime(start_text, "%Y%m%d"), tz="UTC")
+    current = pd.Timestamp(now or datetime.now(UTC))
+    started = datetime.now(UTC)
+    files: list[dict[str, Any]] = []
+    request_count = 0
+    page_count = 0
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    for timeframe in timeframes:
+        delta = timeframe_delta(timeframe)
+        buffer_candles = max(2, startup_candles // 10)
+        required_start = (backtest_start - (startup_candles + buffer_candles) * delta).floor(delta)
+        closed_end = current.floor(delta) - delta
+        for pair in pairs:
+            path = cache_file(data_dir, pair, timeframe)
+            coverage_path = path.with_suffix(path.suffix + ".coverage.json")
+            attempted_start: pd.Timestamp | None = None
+            if coverage_path.is_file():
+                coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+                attempted_start = pd.Timestamp(coverage["requested_start"])
+            existing = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+            if path.is_file():
+                existing = pd.read_feather(path)
+                existing["date"] = pd.to_datetime(existing["date"], utc=True, errors="coerce")
+
+            ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+            history_cache_hit = False
+            if existing.empty:
+                ranges.append((required_start, closed_end))
+            else:
+                first = existing["date"].min()
+                last = existing["date"].max()
+                if first > required_start and (
+                    attempted_start is None or attempted_start > required_start
+                ):
+                    ranges.append((required_start, min(first - delta, closed_end)))
+                else:
+                    history_cache_hit = True
+                if last < closed_end:
+                    ranges.append((max(last + delta, required_start), closed_end))
+
+            additions: list[pd.DataFrame] = []
+            pages = 0
+            for fetch_start, fetch_end in ranges:
+                if fetch_start > fetch_end:
+                    continue
+                frame, provenance = fetch_crypto_bars(
+                    pair,
+                    timeframe,
+                    fetch_start.to_pydatetime(),
+                    fetch_end.to_pydatetime(),
+                )
+                request_count += 1
+                pages += int(provenance["pages"])
+                page_count += int(provenance["pages"])
+                additions.append(frame.rename(columns={"timestamp": "date"}))
+
+            combined = pd.concat([existing, *additions], ignore_index=True)
+            combined["date"] = pd.to_datetime(combined["date"], utc=True, errors="coerce")
+            combined = (
+                combined.dropna(subset=["date"])
+                .sort_values("date")
+                .drop_duplicates("date", keep="last")
+                .reset_index(drop=True)
+            )
+            combined.to_feather(path)
+            coverage_path.write_text(
+                json.dumps({"requested_start": required_start.isoformat()}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            normalization = normalize_cache_file(path, timeframe)
+            files.append(
+                {
+                    "data_source": "alpaca",
+                    "exchange_reference": "alpaca_crypto_us",
+                    "proxy_market_data": True,
+                    "pair": pair,
+                    "timeframe": timeframe,
+                    "path": str(path),
+                    "cache_hit": not ranges,
+                    "history_cache_hit": history_cache_hit,
+                    "fetches": len(ranges),
+                    "pages": pages,
+                    **normalization,
+                }
+            )
+
+    return {
+        "data_source": "alpaca",
+        "exchange_reference": "alpaca_crypto_us",
+        "proxy_market_data": True,
+        "cache_dir": str(data_dir),
+        "request_count": request_count,
+        "page_count": page_count,
+        "files": files,
+        "returncode": 0,
+        "runtime_seconds": (datetime.now(UTC) - started).total_seconds(),
     }

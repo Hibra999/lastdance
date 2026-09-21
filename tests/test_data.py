@@ -87,3 +87,21 @@ def test_cache_inspection_enforces_startup_history(tmp_path: Path) -> None:
     )
     assert result["quality_status"] == "valid"
     assert result["warmup_candles"] == 9
+
+
+def test_cache_inspection_rejects_multi_day_holes(tmp_path: Path) -> None:
+    path = tmp_path / "SOL_USD-1d.feather"
+    dates = pd.to_datetime(["2023-01-01T00:00:00Z", "2023-01-10T00:00:00Z"])
+    pd.DataFrame(
+        {
+            "date": dates,
+            "open": 10.0,
+            "high": 12.0,
+            "low": 9.0,
+            "close": 11.0,
+            "volume": 2.0,
+        }
+    ).to_feather(path)
+    result = inspect_cache_file(path, "1d")
+    assert result["quality_status"] == "invalid"
+    assert "gap_over_7_days" in result["issues"]

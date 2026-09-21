@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,14 @@ import requests
 from lastdance.data.normalize import normalize_ohlcv, validate_ohlcv
 
 ALPACA_CRYPTO_URL = "https://data.alpaca.markets/v1beta3/crypto/us/bars"
-TIMEFRAME_MAP = {"1m": "1Min", "5m": "5Min", "15m": "15Min", "1h": "1Hour", "1d": "1Day"}
+TIMEFRAME_MAP = {
+    "1m": "1Min",
+    "5m": "5Min",
+    "15m": "15Min",
+    "1h": "1Hour",
+    "4h": "4Hour",
+    "1d": "1Day",
+}
 
 
 def equivalent_symbol(pair: str) -> str:
@@ -32,12 +40,14 @@ def fetch_crypto_bars(
     """Fetch Alpaca crypto bars while preserving explicit non-Bitso provenance."""
     key = os.getenv("ALPACA_API_KEY", "")
     secret = os.getenv("ALPACA_API_SECRET", "")
-    if not key or not secret:
-        raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET are required")
+    if bool(key) != bool(secret):
+        raise RuntimeError("Set both ALPACA_API_KEY and ALPACA_API_SECRET, or neither")
     if timeframe not in TIMEFRAME_MAP:
         raise ValueError(f"Unsupported Alpaca timeframe: {timeframe}")
     client = session or requests.Session()
-    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
+    headers = (
+        {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret} if key and secret else {}
+    )
     params: dict[str, Any] = {
         "symbols": equivalent_symbol(pair),
         "timeframe": TIMEFRAME_MAP[timeframe],
@@ -46,9 +56,16 @@ def fetch_crypto_bars(
         "limit": 10_000,
     }
     rows: list[list[Any]] = []
+    page_count = 0
     while True:
-        response = client.get(ALPACA_CRYPTO_URL, headers=headers, params=params, timeout=30)
+        for attempt in range(3):
+            response = client.get(ALPACA_CRYPTO_URL, headers=headers, params=params, timeout=30)
+            if response.status_code != 429 and response.status_code < 500:
+                break
+            if attempt < 2:
+                time.sleep(min(float(response.headers.get("Retry-After", 1)), 5.0))
         response.raise_for_status()
+        page_count += 1
         payload = response.json()
         for bar in payload.get("bars", {}).get(equivalent_symbol(pair), []):
             rows.append([bar["t"], bar["o"], bar["h"], bar["l"], bar["c"], bar["v"]])
@@ -68,6 +85,7 @@ def fetch_crypto_bars(
         "first_candle": validation.first_candle,
         "last_candle": validation.last_candle,
         "rows": validation.rows,
+        "pages": page_count,
         "valid": validation.valid,
     }
     if cache_path:

@@ -157,6 +157,8 @@ def inspect_cache_file(
     item["gap_count"] = int((gaps > delta).sum())
     if not gaps.empty:
         item["max_gap_candles"] = max(0, int(gaps.max() / delta) - 1)
+        if gaps.max() > pd.Timedelta(days=7):
+            item["issues"].append("gap_over_7_days")
     if backtest_start is None:
         item["warmup_ok"] = True
     else:

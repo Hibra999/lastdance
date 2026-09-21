@@ -186,7 +186,7 @@ def _benchmark_returns(metadata: dict[str, Any], returns: pd.Series) -> pd.Serie
 
 
 def _quantstats_report(
-    returns: pd.Series, benchmark: pd.Series | None, strategy: str
+    returns: pd.Series, benchmark: pd.Series | None, strategy: str, market_label: str
 ) -> str | None:
     if returns.empty or not returns.ne(0).any():
         return None
@@ -194,10 +194,11 @@ def _quantstats_report(
         output = Path(temporary) / "report.html"
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
+            warnings.simplefilter("ignore", UserWarning)
             qs.reports.html(
                 returns,
                 benchmark=benchmark,
-                title=f"{strategy} · Bitso USD",
+                title=f"{strategy} · {market_label}",
                 output=str(output),
                 periods_per_year=365,
                 figfmt="svg",
@@ -233,7 +234,7 @@ h1{font-size:34px;margin:0 0 8px;letter-spacing:-.8px}h2{font-size:20px;margin:0
 .notice{border-left:3px solid var(--amber);background:#251f13;padding:13px 15px;border-radius:8px;color:#ecd9aa}.error{border-left-color:var(--red);background:#2a171d;color:#ffc8cc}.qs{width:100%;height:1800px;border:1px solid var(--line);border-radius:12px;background:white}details{margin-top:16px}summary{cursor:pointer;color:var(--cyan)}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#07131d;border:1px solid var(--line);padding:15px;border-radius:10px;color:#bdd0df;font-size:12px}.footer{font-size:12px;color:var(--muted);margin-top:24px}
 @media(max-width:700px){main{padding:24px 12px}h1{font-size:27px}.card,.hero{padding:16px}.qs{height:1300px}}
 </style></head><body><main>
-<header class="hero"><div class="eyebrow">LastDance · research pipeline</div><h1>Informe consolidado de backtesting</h1><p class="muted">Generado {{ generated }} · Bitso spot · USD · periodo solicitado {{ metadata.timerange }}</p><div class="grid"><div class="metric"><small>Fuente de mercado</small><strong>{{ metadata.data_source }}</strong></div><div class="metric"><small>Pares aceptados</small><strong>{{ metadata.pairs|length }}</strong></div><div class="metric"><small>Pares excluidos</small><strong>{{ metadata.pairs_excluded|default([])|length }}</strong></div><div class="metric"><small>Warm-up requerido</small><strong>{{ metadata.startup_candles_required|default('—') }} velas</strong></div></div></header>
+<header class="hero"><div class="eyebrow">LastDance · research pipeline</div><h1>Informe consolidado de backtesting</h1><p class="muted">Generado {{ generated }} · {{ market_label }} · USD · periodo evaluado {{ metadata.timerange }}</p><div class="grid"><div class="metric"><small>Fuente de mercado</small><strong>{{ metadata.data_source }}</strong></div><div class="metric"><small>Inicio solicitado</small><strong>{{ metadata.requested_history_start|default('—', true) }}</strong></div><div class="metric"><small>Inicio efectivo</small><strong>{{ metadata.effective_history_start|default('—', true) }}</strong></div><div class="metric"><small>Pares aceptados</small><strong>{{ metadata.pairs|length }}</strong></div><div class="metric"><small>Pares excluidos</small><strong>{{ metadata.pairs_excluded|default([])|length }}</strong></div><div class="metric"><small>Warm-up requerido</small><strong>{{ metadata.startup_candles_required|default('—') }} velas</strong></div></div>{% if metadata.proxy_market_data %}<p class="notice">Las velas son de {{ metadata.exchange_reference }} y se evalúan con Bitso sólo como referencia de ejecución. No son velas de Bitso ni se mezclan con su caché.</p>{% endif %}</header>
 <section class="card"><h2>Comparación global</h2><div class="table-wrap"><table><thead><tr><th>Estrategia</th><th>Estado</th><th>Operaciones</th><th>Retorno</th><th>P&amp;L</th><th>Sharpe</th><th>Sortino</th><th>Máx. DD</th><th>Acierto</th><th>Tiempo</th></tr></thead><tbody>
 {% for row in rows %}<tr><td>{{ row.strategy }}</td><td><span class="badge {{ row.status }}">{{ labels.get(row.status,row.status) }}</span></td><td>{{ row.metrics.trades if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.return_total) if row.metrics else '—' }}</td><td>{{ fmt_money(row.metrics.profit_total_abs) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sharpe) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sortino) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.max_drawdown) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.win_rate) if row.metrics else '—' }}</td><td>{{ fmt_num(row.runtime_seconds) }} s</td></tr>{% endfor %}
 </tbody></table></div></section>
@@ -255,6 +256,11 @@ def generate_report(run_dir: Path, output: Path | None = None) -> Path:
     metadata.setdefault("pairs", [])
     metadata.setdefault("pairs_excluded", [])
     metadata.setdefault("data_inventory", [])
+    market_label = (
+        "Alpaca Crypto US (proxy; ejecución Bitso spot)"
+        if metadata.get("proxy_market_data")
+        else f"{metadata.get('exchange_reference', 'mercado')} spot"
+    )
     rows: list[dict[str, Any]] = []
     for outcome in metadata.get("outcomes", []):
         row = {
@@ -272,7 +278,7 @@ def generate_report(run_dir: Path, output: Path | None = None) -> Path:
                 row["metrics"] = _metrics(result, returns, balances)
                 benchmark = _benchmark_returns(metadata, returns)
                 row["quantstats_html"] = _quantstats_report(
-                    returns, benchmark, outcome["strategy"]
+                    returns, benchmark, outcome["strategy"], market_label
                 )
                 if not result["trades"]:
                     row["status"] = "no_trades"
@@ -288,6 +294,7 @@ def generate_report(run_dir: Path, output: Path | None = None) -> Path:
     output.write_text(
         REPORT_TEMPLATE.render(
             generated=datetime.now(UTC).isoformat(),
+            market_label=market_label,
             metadata=metadata,
             metadata_json=json.dumps(metadata, indent=2, sort_keys=True),
             rows=rows,

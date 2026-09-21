@@ -117,9 +117,9 @@ conda run -n lastdance python scripts/scan_secrets.py
 conda run -n lastdance python -m lastdance doctor
 conda run -n lastdance python -m lastdance pairs --validate-history
 conda run -n lastdance python -m lastdance strategies --freqtrade
-conda run -n lastdance python -m lastdance data --days 180 --pairs BTC/USD DOGE/USD SOL/USD
+conda run -n lastdance python -m lastdance data
 conda run -n lastdance python -m lastdance benchmark
-conda run -n lastdance python -m lastdance backtest --days 180 --pairs BTC/USD DOGE/USD SOL/USD
+conda run -n lastdance python -m lastdance backtest --workers 1
 conda run -n lastdance python -m lastdance report --open
 conda run -n lastdance python -m lastdance verify-bitso
 conda run -n lastdance python -m lastdance dry-run
@@ -164,16 +164,17 @@ The verified public snapshot contained 54 markets and 26 USD spot candidates. Hi
 
 ## NFI strategies
 
-NFI's current `recommended_config.json` selects `NostalgiaForInfinityX7`. LastDance enables X7 and the maintained X6 generation for comparison:
+NFI's current `recommended_config.json` selects `NostalgiaForInfinityX7`. LastDance enables every upstream strategy whose main timeframe is 5m:
 
 | Strategy | Default | Status | Reason |
 |---|---:|---|---|
 | NostalgiaForInfinityX7 | enabled | supported | Current upstream recommendation |
 | NostalgiaForInfinityX6 | enabled | supported | Maintained comparison generation |
-| X5, X4, X3, X2, X | disabled | importable | Superseded generations |
-| Next, NextGen | disabled | legacy | Stored under upstream `legacy/` |
+| X5, X4, X3, X2, X | enabled | historical | Superseded generations retained for comparison |
+| NostalgiaForInfinityNext | enabled | legacy | Legacy 5m comparison |
+| NostalgiaForInfinityNextGen | disabled | legacy | Upstream main timeframe is 15m |
 
-All registered strategy sources are parsed in tests. X6 and X7 are imported through the installed Freqtrade stack and retain NFI's 5-minute timeframe and 800 startup candles. LastDance does not tune or rewrite NFI parameters.
+All enabled sources are imported through the installed Freqtrade stack and smoke-backtested. X5 and Next receive the minimal reproducible NumPy/Pandas compatibility patch documented under `patches/`; trading conditions and parameters are unchanged. The 5m strategies keep NFI's required 15m, 1h, 4h, and 1d informative frames. LastDance does not tune NFI parameters.
 
 Toggle a strategy in `config/strategies.yaml`:
 
@@ -185,11 +186,11 @@ strategies:
 
 ## Historical data and Alpaca
 
-Primary data comes from Bitso through Freqtrade/CCXT. Required NFI timeframes are `5m`, `15m`, `1h`, `4h`, and `1d`. Freqtrade stores Feather files under `user_data/data` and reuses them on later runs.
+The default historical source is Alpaca Crypto US. Required NFI timeframes are `5m`, `15m`, `1h`, `4h`, and `1d`. Alpaca Feather files live under `user_data/data/alpaca`, separate from Bitso files.
 
-Downloads expand each timeframe independently by NFI's 800 startup candles, prepend missing history, retry one transient exchange failure, and then update to the latest closed candle. Bitso's shifted duplicate daily timestamps are canonicalized only when their OHLCV values are identical; conflicting candles fail instead of being guessed.
+Downloads expand each timeframe independently by NFI's 800 startup candles plus a gap margin. Coverage metadata prevents repeated historical requests; subsequent runs fetch only an uncovered prefix or candles after the cached tail. Duplicate timestamps are merged only when their OHLCV values agree, and any gap longer than seven days excludes that pair from a run.
 
-`lastdance.data.alpaca` provides an authenticated alternative for equivalent USD crypto symbols. Alpaca records always contain:
+Historical crypto requests work anonymously; `ALPACA_API_KEY` and `ALPACA_API_SECRET` are optional and, when used, must both be set. Alpaca records always contain:
 
 ```text
 data_source=alpaca
@@ -197,7 +198,7 @@ exchange_reference=alpaca_crypto_us
 proxy_market_data=true
 ```
 
-Alpaca candles are never labeled as Bitso data and are never silently mixed with Bitso candles. The default pipeline does not use Alpaca.
+Alpaca candles are never labeled as Bitso data and are never silently mixed with Bitso candles. Reports identify Alpaca as a proxy and Bitso only as the execution reference.
 
 ## Backtesting
 
@@ -212,7 +213,9 @@ Each run stores:
 - Requested, accepted, and excluded pairs with reasons.
 - Per-strategy status (`success`, `no_trades`, `invalid_data`, `invalid_result`, or `failed`), runtime, log, and Freqtrade export.
 
-A validated 180-day run used real Bitso `BTC/USD`, `DOGE/USD`, and `SOL/USD` candles with complete 800-candle warm-up on every timeframe. X6 produced 2 trades and $27.21 profit; X7 produced 1 trade and $28.75 profit from a $10,000 starting wallet. Both final balances reconciled exactly. A valid zero-trade run is reported as `no_trades`, never as a successful performance result.
+A validated run covers `2023-03-12` through `2026-09-21` with Alpaca `BTC/USD` and `DOGE/USD`, complete 800-candle daily warm-up, and all eight 5m strategies. The requested 2020 lower bound is recorded, but Alpaca Crypto US begins on 2021-01-01; preserving NFI's 800 daily startup candles makes 2023-03-12 the first valid signal date. `SOL/USD` is excluded because Alpaca contains a 417-day gap.
+
+From a $10,000 starting wallet, the validated run produced 1–29 trades per strategy. The largest results were X5 with 11 trades and $619.04, X6 with 9 trades and $503.22, and Next with 29 trades and $314.36. These are research results from proxy market data, not forecasts or Bitso fills. A valid zero-trade run is reported as `no_trades`, never as a successful performance result.
 
 ## CUDA and performance
 

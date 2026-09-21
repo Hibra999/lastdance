@@ -15,11 +15,12 @@ from typing import Any
 import psutil
 
 from lastdance.config import load_app_config
-from lastdance.data.downloader import run_freqtrade
+from lastdance.data.downloader import configured_data_dir, run_freqtrade
 from lastdance.data.normalize import cache_file, inspect_cache_file
 from lastdance.exchanges.freqtrade_config import build_runtime_config, write_runtime_config
-from lastdance.paths import NFI_ROOT, PROJECT_ROOT, RESULTS_DIR, USER_DATA_DIR
+from lastdance.paths import NFI_ROOT, PROJECT_ROOT, RESULTS_DIR
 from lastdance.strategies.registry import StrategyRegistry
+from lastdance.strategies.runtime_patch import prepare_strategy_path
 from lastdance.utils.jsonio import write_json
 
 
@@ -38,9 +39,11 @@ def auto_workers(strategy_count: int) -> int:
 
 def run_one(
     strategy: str,
+    strategy_path: Path,
     runtime_config: Path,
     timerange: str,
     run_dir: Path,
+    data_dir: Path,
 ) -> dict[str, Any]:
     strategy_dir = run_dir / strategy
     strategy_dir.mkdir(parents=True, exist_ok=True)
@@ -50,11 +53,11 @@ def run_one(
         "--config",
         str(runtime_config),
         "--strategy-path",
-        str(NFI_ROOT),
+        str(strategy_path),
         "--strategy",
         strategy,
         "--datadir",
-        str(USER_DATA_DIR / "data"),
+        str(data_dir),
         "--timerange",
         timerange,
         "--export",
@@ -129,17 +132,24 @@ def _timerange_start(timerange: str) -> datetime:
 
 
 def _data_inventory(
-    pairs: list[str], timeframes: list[str], *, backtest_start: datetime, startup_candles: int
+    pairs: list[str],
+    timeframes: list[str],
+    *,
+    backtest_start: datetime,
+    startup_candles: int,
+    data_dir: Path,
+    data_source: str,
+    exchange_reference: str,
+    proxy_market_data: bool,
 ) -> list[dict[str, Any]]:
     inventory: list[dict[str, Any]] = []
-    data_dir = USER_DATA_DIR / "data"
     for pair in pairs:
         for timeframe in timeframes:
             path = cache_file(data_dir, pair, timeframe)
             item = {
-                "data_source": "bitso",
-                "exchange_reference": "bitso",
-                "proxy_market_data": False,
+                "data_source": data_source,
+                "exchange_reference": exchange_reference,
+                "proxy_market_data": proxy_market_data,
                 "pair": pair,
                 **inspect_cache_file(
                     path,
@@ -167,11 +177,19 @@ def run_backtests(
     specs = [registry.get(name) for name in strategies]
     startup_candles = max((item.startup_candles for item in specs), default=0)
     timeframes = list(app["data"]["timeframes"])
+    data_source = str(app["data"]["source"])
+    proxy_market_data = bool(app["data"].get("proxy_market_data", False))
+    exchange_reference = "alpaca_crypto_us" if data_source == "alpaca" else app["exchange"]["name"]
+    data_dir = configured_data_dir(app)
     inventory = _data_inventory(
         pairs,
         timeframes,
         backtest_start=_timerange_start(timerange),
         startup_candles=startup_candles,
+        data_dir=data_dir,
+        data_source=data_source,
+        exchange_reference=exchange_reference,
+        proxy_market_data=proxy_market_data,
     )
     pair_issues = {
         pair: sorted(
@@ -215,8 +233,16 @@ def run_backtests(
             max_workers=selected_workers, thread_name_prefix="lastdance-backtest"
         ) as executor:
             futures = {
-                executor.submit(run_one, strategy, runtime_config, timerange, run_dir): strategy
-                for strategy in strategies
+                executor.submit(
+                    run_one,
+                    spec.name,
+                    prepare_strategy_path(spec.name, spec.source),
+                    runtime_config,
+                    timerange,
+                    run_dir,
+                    data_dir,
+                ): spec.name
+                for spec in specs
             }
             for future in as_completed(futures):
                 try:
@@ -243,9 +269,13 @@ def run_backtests(
         "packages": packages,
         "python": sys.version,
         "os": platform.platform(),
-        "data_source": app["data"]["source"],
-        "exchange_reference": app["exchange"]["name"],
-        "proxy_market_data": bool(app["data"].get("proxy_market_data", False)),
+        "data_source": data_source,
+        "exchange_reference": exchange_reference,
+        "execution_reference": app["exchange"]["name"],
+        "proxy_market_data": proxy_market_data,
+        "requested_history_start": app["data"].get("requested_history_start"),
+        "effective_history_start": _timerange_start(timerange).date().isoformat(),
+        "data_dir": str(data_dir),
         "timerange": timerange,
         "timeframes": timeframes,
         "startup_candles_required": startup_candles,
