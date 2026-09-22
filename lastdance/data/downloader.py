@@ -10,7 +10,12 @@ from typing import Any
 import pandas as pd
 
 from lastdance.data.alpaca import fetch_crypto_bars
-from lastdance.data.normalize import cache_file, normalize_cache_file, timeframe_delta
+from lastdance.data.normalize import (
+    cache_file,
+    inspect_cache_file,
+    normalize_cache_file,
+    timeframe_delta,
+)
 from lastdance.exchanges.freqtrade_config import freqtrade_environment
 from lastdance.paths import PROJECT_ROOT, USER_DATA_DIR, resolve_project_path
 
@@ -162,20 +167,27 @@ def download_alpaca_data(
     files: list[dict[str, Any]] = []
     request_count = 0
     page_count = 0
+    eligible_pairs = list(pairs)
+    preflight_excluded_pairs: list[str] = []
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    for timeframe in timeframes:
+    ordered_timeframes = sorted(timeframes, key=lambda item: item != "1d")
+    for timeframe in ordered_timeframes:
         delta = timeframe_delta(timeframe)
         buffer_candles = max(2, startup_candles // 10)
         required_start = (backtest_start - (startup_candles + buffer_candles) * delta).floor(delta)
         closed_end = current.floor(delta) - delta
-        for pair in pairs:
+        selected_pairs = pairs if timeframe == "1d" else eligible_pairs
+        for pair in selected_pairs:
             path = cache_file(data_dir, pair, timeframe)
             coverage_path = path.with_suffix(path.suffix + ".coverage.json")
             attempted_start: pd.Timestamp | None = None
+            attempted_end: pd.Timestamp | None = None
             if coverage_path.is_file():
                 coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
                 attempted_start = pd.Timestamp(coverage["requested_start"])
+                if coverage.get("requested_end"):
+                    attempted_end = pd.Timestamp(coverage["requested_end"])
             existing = pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
             if path.is_file():
                 existing = pd.read_feather(path)
@@ -184,7 +196,16 @@ def download_alpaca_data(
             ranges: list[tuple[pd.Timestamp, pd.Timestamp]] = []
             history_cache_hit = False
             if existing.empty:
-                ranges.append((required_start, closed_end))
+                if (
+                    attempted_start is not None
+                    and attempted_start <= required_start
+                    and attempted_end is not None
+                ):
+                    history_cache_hit = True
+                    if attempted_end < closed_end:
+                        ranges.append((max(attempted_end + delta, required_start), closed_end))
+                else:
+                    ranges.append((required_start, closed_end))
             else:
                 first = existing["date"].min()
                 last = existing["date"].max()
@@ -223,7 +244,14 @@ def download_alpaca_data(
             )
             combined.to_feather(path)
             coverage_path.write_text(
-                json.dumps({"requested_start": required_start.isoformat()}, indent=2) + "\n",
+                json.dumps(
+                    {
+                        "requested_start": required_start.isoformat(),
+                        "requested_end": closed_end.isoformat(),
+                    },
+                    indent=2,
+                )
+                + "\n",
                 encoding="utf-8",
             )
             normalization = normalize_cache_file(path, timeframe)
@@ -243,6 +271,19 @@ def download_alpaca_data(
                 }
             )
 
+        if timeframe == "1d":
+            eligible_pairs = [
+                pair
+                for pair in pairs
+                if not inspect_cache_file(
+                    cache_file(data_dir, pair, timeframe),
+                    timeframe,
+                    backtest_start=backtest_start,
+                    startup_candles=startup_candles,
+                )["issues"]
+            ]
+            preflight_excluded_pairs = [pair for pair in pairs if pair not in eligible_pairs]
+
     return {
         "data_source": "alpaca",
         "exchange_reference": "alpaca_crypto_us",
@@ -250,6 +291,8 @@ def download_alpaca_data(
         "cache_dir": str(data_dir),
         "request_count": request_count,
         "page_count": page_count,
+        "preflight_eligible_pairs": eligible_pairs,
+        "preflight_excluded_pairs": preflight_excluded_pairs,
         "files": files,
         "returncode": 0,
         "runtime_seconds": (datetime.now(UTC) - started).total_seconds(),

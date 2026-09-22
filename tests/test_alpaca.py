@@ -89,3 +89,72 @@ def test_alpaca_cache_skips_already_covered_history(tmp_path: Path) -> None:
     )
     assert result["request_count"] == 0
     assert result["files"][0]["cache_hit"] is True
+
+
+def test_alpaca_cache_remembers_empty_provider_history(tmp_path: Path, monkeypatch) -> None:
+    calls = 0
+
+    def empty_fetch(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"]), {
+            "pages": 1
+        }
+
+    monkeypatch.setattr("lastdance.data.downloader.fetch_crypto_bars", empty_fetch)
+    kwargs = {
+        "pairs": ["MISSING/USD"],
+        "timeframes": ["1d"],
+        "timerange": "20230103-",
+        "startup_candles": 2,
+        "data_dir": tmp_path / "alpaca",
+        "now": datetime(2023, 1, 11, tzinfo=UTC),
+    }
+    first = download_alpaca_data(**kwargs)
+    second = download_alpaca_data(**kwargs)
+
+    assert first["request_count"] == 1
+    assert second["request_count"] == 0
+    assert second["files"][0]["history_cache_hit"] is True
+    assert calls == 1
+
+
+def test_alpaca_daily_preflight_skips_invalid_intraday_downloads(
+    tmp_path: Path, monkeypatch
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_fetch(pair, timeframe, start, end):
+        calls.append((pair, timeframe))
+        timestamps = (
+            pd.date_range("2023-01-01", periods=3, freq="1D", tz="UTC")
+            if pair == "BTC/USD" and timeframe == "1d"
+            else pd.DatetimeIndex([pd.Timestamp(start)])
+            if pair == "BTC/USD"
+            else pd.DatetimeIndex([])
+        )
+        frame = pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": 10.0,
+                "high": 12.0,
+                "low": 9.0,
+                "close": 11.0,
+                "volume": 2.0,
+            }
+        )
+        return frame, {"pages": 1}
+
+    monkeypatch.setattr("lastdance.data.downloader.fetch_crypto_bars", fake_fetch)
+    result = download_alpaca_data(
+        ["BTC/USD", "MISSING/USD"],
+        ["5m", "1d"],
+        "20230103-",
+        startup_candles=2,
+        data_dir=tmp_path / "alpaca",
+        now=datetime(2023, 1, 4, tzinfo=UTC),
+    )
+
+    assert calls == [("BTC/USD", "1d"), ("MISSING/USD", "1d"), ("BTC/USD", "5m")]
+    assert result["preflight_eligible_pairs"] == ["BTC/USD"]
+    assert result["preflight_excluded_pairs"] == ["MISSING/USD"]
