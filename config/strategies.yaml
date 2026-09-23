@@ -85,12 +85,12 @@ strategies:
     startup_candles: 480
     generation: legacy
   NostalgiaForInfinityNextGen:
-    enabled: false
+    enabled: true
     source: third_party/NostalgiaForInfinity/legacy/NostalgiaForInfinityNextGen.py
     compatibility: legacy
-    reason_disabled: Upstream strategy uses a 15m main timeframe; excluded by the requested 5m-only policy.
+    reason: Legacy strategy enabled at its upstream 15m main timeframe.
     accelerated: false
-    tested: false
+    tested: true
     timeframe: 15m
     startup_candles: 480
     generation: legacy

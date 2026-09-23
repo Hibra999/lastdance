@@ -7,7 +7,12 @@ import pandas as pd
 import pytest
 
 from lastdance.reporting import consolidated
-from lastdance.reporting.consolidated import _portfolio_returns, generate_report
+from lastdance.reporting.consolidated import (
+    _benchmark_returns,
+    _monte_carlo,
+    _portfolio_returns,
+    generate_report,
+)
 
 
 def _result() -> dict[str, object]:
@@ -89,9 +94,49 @@ def test_consolidated_report_generation(tmp_path: Path, monkeypatch) -> None:
     text = output.read_text(encoding="utf-8")
     assert "Comparación global" in text
     assert "Integridad de datos" in text
-    assert "QuantStats · tear sheet completo" in text
+    assert "QuantStats · P&amp;L realizado vs Buy &amp; Hold" in text
     assert "QuantStats native" in text
     assert "$10,050.00" in text
+    assert "Wins / Draws / Losses" in text
+    assert "Monte Carlo" in text
+
+
+def test_buy_hold_benchmark_is_named_and_held_to_end(tmp_path: Path) -> None:
+    path = tmp_path / "BTC_USD-1d.feather"
+    pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=5, tz="UTC"),
+            "close": [100.0, 105.0, 95.0, 110.0, 120.0],
+        }
+    ).to_feather(path)
+    returns = pd.Series(0.0, index=pd.date_range("2026-01-01", periods=5))
+    benchmark, pair = _benchmark_returns(
+        {
+            "data_inventory": [
+                {
+                    "pair": "BTC/USD",
+                    "timeframe": "1d",
+                    "quality_status": "valid",
+                    "path": str(path),
+                }
+            ]
+        },
+        returns,
+    )
+    assert pair == "BTC/USD"
+    assert benchmark is not None
+    assert benchmark.name == "Buy & Hold BTC/USD"
+    assert (1.0 + benchmark).prod() - 1.0 == pytest.approx(0.20)
+
+
+def test_monte_carlo_is_reproducible() -> None:
+    returns = pd.Series([0.01, 0.0, -0.005, 0.02])
+    first = _monte_carlo(returns, simulations=500, seed=7, benchmark_return=0.01)
+    second = _monte_carlo(returns, simulations=500, seed=7, benchmark_return=0.01)
+    assert first == second
+    assert first is not None
+    assert 0 <= first["probability_profit"] <= 1
+    assert first["return_p05"] <= first["return_p50"] <= first["return_p95"]
 
 
 def test_metadata_json_is_not_accepted_as_a_zero_trade_result(tmp_path: Path) -> None:

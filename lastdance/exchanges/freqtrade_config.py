@@ -19,6 +19,7 @@ def build_runtime_config(
     blacklist: list[str] | None = None,
     *,
     strategy: str | None = None,
+    timeframe: str | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     config = deepcopy(load_base_config())
@@ -27,6 +28,8 @@ def build_runtime_config(
     config["exchange"]["pair_blacklist"] = list(blacklist or [])
     if strategy:
         config["strategy"] = strategy
+    if timeframe:
+        config["timeframe"] = timeframe
     if not dry_run:
         gates = (
             os.getenv("LIVE_TRADING", "").lower() == "true",

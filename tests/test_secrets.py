@@ -24,8 +24,12 @@ def test_secret_scanner_detects_credential_shape() -> None:
 
 
 def test_runtime_config_has_no_secrets(tmp_path) -> None:
-    config = build_runtime_config(["BTC/USD"])
+    config = build_runtime_config(
+        ["BTC/USD"], strategy="NostalgiaForInfinityNextGen", timeframe="15m"
+    )
     assert config["dry_run"] is True
+    assert config["strategy"] == "NostalgiaForInfinityNextGen"
+    assert config["timeframe"] == "15m"
     assert config["exchange"]["key"] == ""
     write_runtime_config(tmp_path / "runtime.json", config)
     config["exchange"]["key"] = "not-allowed"

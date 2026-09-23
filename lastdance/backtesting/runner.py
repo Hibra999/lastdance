@@ -176,7 +176,7 @@ def run_backtests(
     strategies = strategy_names or [item.name for item in registry.enabled()]
     specs = [registry.get(name) for name in strategies]
     startup_candles = max((item.startup_candles for item in specs), default=0)
-    timeframes = list(app["data"]["timeframes"])
+    timeframes = list(dict.fromkeys([*app["data"]["timeframes"], *(item.timeframe for item in specs)]))
     data_source = str(app["data"]["source"])
     proxy_market_data = bool(app["data"].get("proxy_market_data", False))
     exchange_reference = "alpaca_crypto_us" if data_source == "alpaca" else app["exchange"]["name"]
@@ -209,10 +209,17 @@ def run_backtests(
     run_id = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     run_dir = RESULTS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    runtime_config = write_runtime_config(
-        run_dir / "freqtrade.runtime.json",
-        build_runtime_config(pairs_used or pairs, strategy=strategies[0] if strategies else None),
-    )
+    runtime_configs = {
+        spec.name: write_runtime_config(
+            run_dir / f"freqtrade.{spec.name}.runtime.json",
+            build_runtime_config(
+                pairs_used or pairs,
+                strategy=spec.name,
+                timeframe=spec.timeframe,
+            ),
+        )
+        for spec in specs
+    }
     selected_workers = workers or auto_workers(len(strategies))
     outcomes: list[dict[str, Any]] = []
     if not pairs_used:
@@ -237,7 +244,7 @@ def run_backtests(
                     run_one,
                     spec.name,
                     prepare_strategy_path(spec.name, spec.source),
-                    runtime_config,
+                    runtime_configs[spec.name],
                     timerange,
                     run_dir,
                     data_dir,
@@ -285,6 +292,7 @@ def run_backtests(
         "pairs_excluded": pairs_excluded,
         "pair_snapshot": pair_snapshot,
         "strategies": strategies,
+        "strategy_timeframes": {item.name: item.timeframe for item in specs},
         "acceleration_mode": app["acceleration"]["mode"],
         "cpu_workers": selected_workers,
         "outcomes": sorted(outcomes, key=lambda item: item["strategy"]),

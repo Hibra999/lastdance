@@ -132,6 +132,7 @@ def command_strategies(args: argparse.Namespace) -> int:
                 str(runtime),
                 "--strategy-path",
                 str(NFI_ROOT),
+                "--recursive-strategy-search",
                 "--no-color",
             ],
             log_path=RESULTS_DIR / "runtime" / "strategy-check.log",
@@ -262,7 +263,13 @@ def command_dry_run(args: argparse.Namespace) -> int:
     spec = StrategyRegistry().get(strategy)
     strategy_path = prepare_strategy_path(spec.name, spec.source)
     runtime = write_runtime_config(
-        RESULTS_DIR / "runtime" / "dry-run.json", build_runtime_config(pairs, strategy=strategy, dry_run=True)
+        RESULTS_DIR / "runtime" / "dry-run.json",
+        build_runtime_config(
+            pairs,
+            strategy=strategy,
+            timeframe=spec.timeframe,
+            dry_run=True,
+        ),
     )
     if not args.start:
         _print(

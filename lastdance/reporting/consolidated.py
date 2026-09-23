@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import quantstats as qs
 from jinja2 import Environment
@@ -134,6 +135,9 @@ def _metrics(result: dict[str, Any], returns: pd.Series, balances: dict[str, Any
     profits = [_finite(item.get("profit_ratio")) or 0.0 for item in trades]
     absolute_profits = [_finite(item.get("profit_abs")) or 0.0 for item in trades]
     durations = [_finite(item.get("trade_duration")) or 0.0 for item in trades]
+    winners = [value for value in profits if value > 0]
+    losers = [value for value in profits if value < 0]
+    draws = [value for value in profits if value == 0]
     gains = sum(value for value in absolute_profits if value > 0)
     losses = abs(sum(value for value in absolute_profits if value < 0))
     return {
@@ -145,13 +149,30 @@ def _metrics(result: dict[str, Any], returns: pd.Series, balances: dict[str, Any
         "sortino": _risk_metric(qs.stats.sortino, returns, periods=365),
         "max_drawdown": _risk_metric(qs.stats.max_drawdown, returns),
         "volatility": _risk_metric(qs.stats.volatility, returns, periods=365),
-        "win_rate": _finite(result.get("winrate")),
+        "wins": len(winners),
+        "losses": len(losers),
+        "draws": len(draws),
+        "win_rate": len(winners) / len(trades) if trades else None,
         "profit_factor": gains / losses if losses else None,
         "average_trade": _finite(result.get("profit_mean")),
+        "average_win": sum(winners) / len(winners) if winners else None,
+        "average_loss": sum(losers) / len(losers) if losers else None,
         "best_trade": max(profits) if profits else None,
         "worst_trade": min(profits) if profits else None,
         "average_duration_minutes": sum(durations) / len(durations) if durations else None,
         "backtest_duration_days": _finite(result.get("backtest_days")),
+        "trades_per_day": _finite(result.get("trades_per_day")),
+        "winning_days": int(result.get("winning_days", 0)),
+        "draw_days": int(result.get("draw_days", 0)),
+        "losing_days": int(result.get("losing_days", 0)),
+        "max_consecutive_wins": int(result.get("max_consecutive_wins", 0)),
+        "max_consecutive_losses": int(result.get("max_consecutive_losses", 0)),
+        "expectancy": _finite(result.get("expectancy")),
+        "expectancy_ratio": _finite(result.get("expectancy_ratio")),
+        "calmar": _finite(result.get("calmar")),
+        "sqn": _finite(result.get("sqn")),
+        "total_volume": _finite(result.get("total_volume")),
+        "max_drawdown_abs": _finite(result.get("max_drawdown_abs")),
         "market_change": _finite(result.get("market_change")),
         "pairs": list(result.get("pairlist", [])),
         "backtest_start": result.get("backtest_start"),
@@ -160,7 +181,9 @@ def _metrics(result: dict[str, Any], returns: pd.Series, balances: dict[str, Any
     }
 
 
-def _benchmark_returns(metadata: dict[str, Any], returns: pd.Series) -> pd.Series | None:
+def _benchmark_returns(
+    metadata: dict[str, Any], returns: pd.Series
+) -> tuple[pd.Series | None, str | None]:
     candidates = sorted(
         metadata.get("data_inventory", []),
         key=lambda item: (item.get("pair") != "BTC/USD", item.get("timeframe") != "1d"),
@@ -176,17 +199,80 @@ def _benchmark_returns(metadata: dict[str, Any], returns: pd.Series) -> pd.Serie
         None,
     )
     if item is None or returns.empty:
-        return None
+        return None, None
     frame = pd.read_feather(item["path"], columns=["date", "close"])
     frame["date"] = pd.to_datetime(frame["date"], utc=True).dt.tz_localize(None).dt.normalize()
     close = frame.drop_duplicates("date", keep="last").set_index("date")["close"].sort_index()
     close = close.reindex(returns.index).ffill()
+    if close.isna().any():
+        return None, None
     benchmark = close.pct_change(fill_method=None).fillna(0.0)
-    return benchmark if benchmark.notna().any() else None
+    pair = str(item["pair"])
+    benchmark.name = f"Buy & Hold {pair}"
+    return (benchmark, pair) if benchmark.notna().any() else (None, None)
+
+
+def _buy_hold_metrics(
+    benchmark: pd.Series | None, pair: str | None, starting_balance: float | None
+) -> dict[str, Any]:
+    total_return = None if benchmark is None else _finite(qs.stats.comp(benchmark))
+    profit = (
+        None
+        if total_return is None or starting_balance is None
+        else starting_balance * total_return
+    )
+    return {
+        "buy_hold_pair": pair,
+        "buy_hold_return": total_return,
+        "buy_hold_profit_abs": profit,
+        "buy_hold_final_balance": None if profit is None else starting_balance + profit,
+    }
+
+
+def _monte_carlo(
+    returns: pd.Series,
+    *,
+    benchmark_return: float | None = None,
+    simulations: int = 5_000,
+    seed: int = 42,
+) -> dict[str, Any] | None:
+    values = returns.to_numpy(dtype=float)
+    values = values[np.isfinite(values)]
+    if not len(values) or not np.any(values):
+        return None
+    rng = np.random.default_rng(seed)
+    equity = np.ones(simulations)
+    peak = np.ones(simulations)
+    max_drawdown = np.zeros(simulations)
+    for _ in values:
+        equity *= 1.0 + rng.choice(values, simulations, replace=True)
+        peak = np.maximum(peak, equity)
+        max_drawdown = np.minimum(max_drawdown, equity / peak - 1.0)
+    terminal_returns = equity - 1.0
+    return {
+        "simulations": simulations,
+        "seed": seed,
+        "sample_days": len(values),
+        "return_p05": _finite(np.quantile(terminal_returns, 0.05)),
+        "return_p50": _finite(np.quantile(terminal_returns, 0.50)),
+        "return_p95": _finite(np.quantile(terminal_returns, 0.95)),
+        "probability_profit": _finite(np.mean(terminal_returns > 0)),
+        "probability_beat_buy_hold": (
+            None
+            if benchmark_return is None
+            else _finite(np.mean(terminal_returns > benchmark_return))
+        ),
+        "drawdown_p05": _finite(np.quantile(max_drawdown, 0.05)),
+        "drawdown_p50": _finite(np.quantile(max_drawdown, 0.50)),
+    }
 
 
 def _quantstats_report(
-    returns: pd.Series, benchmark: pd.Series | None, strategy: str, market_label: str
+    returns: pd.Series,
+    benchmark: pd.Series | None,
+    strategy: str,
+    market_label: str,
+    benchmark_title: str | None,
 ) -> str | None:
     if returns.empty or not returns.ne(0).any():
         return None
@@ -202,6 +288,9 @@ def _quantstats_report(
                 output=str(output),
                 periods_per_year=365,
                 figfmt="svg",
+                strategy_title=f"PnL {strategy}",
+                benchmark_title=benchmark_title,
+                parameters={"PnL": "USD sobre capital inicial", "HODL": "compra inicial, sin ventas"},
             )
         return output.read_text(encoding="utf-8")
 
@@ -235,15 +324,16 @@ h1{font-size:34px;margin:0 0 8px;letter-spacing:-.8px}h2{font-size:20px;margin:0
 @media(max-width:700px){main{padding:24px 12px}h1{font-size:27px}.card,.hero{padding:16px}.qs{height:1300px}}
 </style></head><body><main>
 <header class="hero"><div class="eyebrow">LastDance · research pipeline</div><h1>Informe consolidado de backtesting</h1><p class="muted">Generado {{ generated }} · {{ market_label }} · USD · periodo evaluado {{ metadata.timerange }}</p><div class="grid"><div class="metric"><small>Fuente de mercado</small><strong>{{ metadata.data_source }}</strong></div><div class="metric"><small>Inicio solicitado</small><strong>{{ metadata.requested_history_start|default('—', true) }}</strong></div><div class="metric"><small>Inicio efectivo</small><strong>{{ metadata.effective_history_start|default('—', true) }}</strong></div><div class="metric"><small>Pares aceptados</small><strong>{{ metadata.pairs|length }}</strong></div><div class="metric"><small>Pares excluidos</small><strong>{{ metadata.pairs_excluded|default([])|length }}</strong></div><div class="metric"><small>Warm-up requerido</small><strong>{{ metadata.startup_candles_required|default('—') }} velas</strong></div></div>{% if metadata.proxy_market_data %}<p class="notice">Las velas son de {{ metadata.exchange_reference }} y se evalúan con Bitso sólo como referencia de ejecución. No son velas de Bitso ni se mezclan con su caché.</p>{% endif %}</header>
-<section class="card"><h2>Comparación global</h2><div class="table-wrap"><table><thead><tr><th>Estrategia</th><th>Estado</th><th>Operaciones</th><th>Retorno</th><th>P&amp;L</th><th>Sharpe</th><th>Sortino</th><th>Máx. DD</th><th>Acierto</th><th>Tiempo</th></tr></thead><tbody>
-{% for row in rows %}<tr><td>{{ row.strategy }}</td><td><span class="badge {{ row.status }}">{{ labels.get(row.status,row.status) }}</span></td><td>{{ row.metrics.trades if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.return_total) if row.metrics else '—' }}</td><td>{{ fmt_money(row.metrics.profit_total_abs) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sharpe) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sortino) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.max_drawdown) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.win_rate) if row.metrics else '—' }}</td><td>{{ fmt_num(row.runtime_seconds) }} s</td></tr>{% endfor %}
+<section class="card"><h2>Comparación global</h2><div class="table-wrap"><table><thead><tr><th>Estrategia</th><th>Estado</th><th>Operaciones</th><th>Wins</th><th>Draws</th><th>Losses</th><th>Retorno</th><th>P&amp;L estrategia</th><th>P&amp;L Buy &amp; Hold</th><th>Sharpe</th><th>Sortino</th><th>Máx. DD</th><th>Acierto</th><th>Tiempo</th></tr></thead><tbody>
+{% for row in rows %}<tr><td>{{ row.strategy }}</td><td><span class="badge {{ row.status }}">{{ labels.get(row.status,row.status) }}</span></td><td>{{ row.metrics.trades if row.metrics else '—' }}</td><td>{{ row.metrics.wins if row.metrics else '—' }}</td><td>{{ row.metrics.draws if row.metrics else '—' }}</td><td>{{ row.metrics.losses if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.return_total) if row.metrics else '—' }}</td><td>{{ fmt_money(row.metrics.profit_total_abs) if row.metrics else '—' }}</td><td>{{ fmt_money(row.metrics.buy_hold_profit_abs) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sharpe) if row.metrics else '—' }}</td><td>{{ fmt_num(row.metrics.sortino) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.max_drawdown) if row.metrics else '—' }}</td><td>{{ fmt_pct(row.metrics.win_rate) if row.metrics else '—' }}</td><td>{{ fmt_num(row.runtime_seconds) }} s</td></tr>{% endfor %}
 </tbody></table></div></section>
 <section class="card"><h2>Integridad de datos</h2><p class="muted">Cada archivo se verificó por hash, estructura OHLCV, timestamps únicos/alineados y warm-up anterior al periodo.</p><div class="table-wrap"><table><thead><tr><th>Par</th><th>TF</th><th>Estado</th><th>Velas</th><th>Warm-up</th><th>Inicio</th><th>Fin</th><th>Gaps</th><th>SHA-256</th></tr></thead><tbody>{% for item in metadata.data_inventory|default([]) %}<tr><td>{{ item.pair }}</td><td>{{ item.timeframe }}</td><td class="{{ item.quality_status }}">{{ item.quality_status }}</td><td>{{ item.candles }}</td><td>{{ item.warmup_candles }}/{{ item.required_warmup_candles }}</td><td>{{ item.first_candle or '—' }}</td><td>{{ item.last_candle or '—' }}</td><td>{{ item.gap_count }}</td><td title="{{ item.sha256 }}">{{ item.sha256[:12] if item.sha256 else '—' }}</td></tr>{% endfor %}</tbody></table></div>
 {% if metadata.pairs_excluded|default([]) %}<h3>Exclusiones</h3>{% for item in metadata.pairs_excluded %}<p class="notice error"><strong>{{ item.pair }}</strong>: {{ item.reasons|join(', ') }}</p>{% endfor %}{% endif %}</section>
 {% for row in rows %}<section class="card"><h2>{{ row.strategy }} <span class="badge {{ row.status }}">{{ labels.get(row.status,row.status) }}</span></h2>
-{% if row.metrics %}<div class="grid"><div class="metric"><small>Capital inicial</small><strong>{{ fmt_money(row.metrics.starting_balance) }}</strong></div><div class="metric"><small>Capital final</small><strong>{{ fmt_money(row.metrics.final_balance) }}</strong></div><div class="metric"><small>Retorno neto</small><strong>{{ fmt_pct(row.metrics.return_total) }}</strong></div><div class="metric"><small>Profit factor</small><strong>{{ fmt_num(row.metrics.profit_factor) }}</strong></div><div class="metric"><small>Máx. drawdown</small><strong>{{ fmt_pct(row.metrics.max_drawdown) }}</strong></div><div class="metric"><small>Cambio del mercado</small><strong>{{ fmt_pct(row.metrics.market_change) }}</strong></div></div>
-<p class="muted">{{ row.metrics.backtest_start }} — {{ row.metrics.backtest_end }} · {{ row.metrics.trades }} operaciones · duración media {{ fmt_num(row.metrics.average_duration_minutes) }} min · retornos: {{ row.metrics.return_method }} · diferencia de conciliación {{ fmt_money(row.metrics.reconciliation_difference) }}</p>
-{% if row.quantstats_html %}<h3>QuantStats · tear sheet completo (365 periodos/año)</h3><iframe class="qs" sandbox="allow-scripts" loading="lazy" srcdoc="{{ row.quantstats_html }}" title="QuantStats {{ row.strategy }}"></iframe>{% else %}<p class="notice">QuantStats no se calcula sin retornos realizados distintos de cero. Esto evita presentar ratios indefinidos como si fueran 0.</p>{% endif %}
+{% if row.metrics %}<div class="grid"><div class="metric"><small>Capital inicial</small><strong>{{ fmt_money(row.metrics.starting_balance) }}</strong></div><div class="metric"><small>P&amp;L estrategia</small><strong>{{ fmt_money(row.metrics.profit_total_abs) }}</strong></div><div class="metric"><small>Capital final estrategia</small><strong>{{ fmt_money(row.metrics.final_balance) }}</strong></div><div class="metric"><small>Retorno estrategia</small><strong>{{ fmt_pct(row.metrics.return_total) }}</strong></div><div class="metric"><small>P&amp;L Buy &amp; Hold {{ row.metrics.buy_hold_pair or '' }}</small><strong>{{ fmt_money(row.metrics.buy_hold_profit_abs) }}</strong></div><div class="metric"><small>Capital final Buy &amp; Hold</small><strong>{{ fmt_money(row.metrics.buy_hold_final_balance) }}</strong></div><div class="metric"><small>Retorno Buy &amp; Hold</small><strong>{{ fmt_pct(row.metrics.buy_hold_return) }}</strong></div><div class="metric"><small>Wins / Draws / Losses</small><strong>{{ row.metrics.wins }} / {{ row.metrics.draws }} / {{ row.metrics.losses }}</strong></div><div class="metric"><small>Profit factor</small><strong>{{ '∞' if row.metrics.wins and not row.metrics.losses else fmt_num(row.metrics.profit_factor) }}</strong></div><div class="metric"><small>Expectancy</small><strong>{{ fmt_num(row.metrics.expectancy) }}</strong></div><div class="metric"><small>Máx. drawdown</small><strong>{{ fmt_pct(row.metrics.max_drawdown) }}</strong></div><div class="metric"><small>Máx. drawdown absoluto</small><strong>{{ fmt_money(row.metrics.max_drawdown_abs) }}</strong></div></div>
+<p class="muted">{{ row.metrics.backtest_start }} — {{ row.metrics.backtest_end }} · {{ row.metrics.trades }} operaciones · {{ fmt_num(row.metrics.trades_per_day) }} operaciones/día · duración media {{ fmt_num(row.metrics.average_duration_minutes) }} min · días W/D/L {{ row.metrics.winning_days }}/{{ row.metrics.draw_days }}/{{ row.metrics.losing_days }} · racha W/L {{ row.metrics.max_consecutive_wins }}/{{ row.metrics.max_consecutive_losses }} · retornos: {{ row.metrics.return_method }} · diferencia de conciliación {{ fmt_money(row.metrics.reconciliation_difference) }}</p>
+{% if row.monte_carlo %}<h3>Monte Carlo · bootstrap diario de P&amp;L</h3><div class="grid"><div class="metric"><small>Retorno percentil 5</small><strong>{{ fmt_pct(row.monte_carlo.return_p05) }}</strong></div><div class="metric"><small>Retorno mediano</small><strong>{{ fmt_pct(row.monte_carlo.return_p50) }}</strong></div><div class="metric"><small>Retorno percentil 95</small><strong>{{ fmt_pct(row.monte_carlo.return_p95) }}</strong></div><div class="metric"><small>Probabilidad de ganancia</small><strong>{{ fmt_pct(row.monte_carlo.probability_profit) }}</strong></div><div class="metric"><small>Probabilidad de superar Buy &amp; Hold</small><strong>{{ fmt_pct(row.monte_carlo.probability_beat_buy_hold) }}</strong></div><div class="metric"><small>Drawdown adverso percentil 5</small><strong>{{ fmt_pct(row.monte_carlo.drawdown_p05) }}</strong></div></div><p class="muted">{{ row.monte_carlo.simulations }} simulaciones · semilla {{ row.monte_carlo.seed }} · {{ row.monte_carlo.sample_days }} días remuestreados. Estima sensibilidad al orden histórico; no modela nuevos regímenes, liquidez ni deslizamiento adicional.</p>{% endif %}
+{% if row.quantstats_html %}<h3>QuantStats · P&amp;L realizado vs Buy &amp; Hold (365 periodos/año)</h3><p class="muted">QuantStats compara retornos porcentuales. Los importes monetarios de P&amp;L aparecen arriba; Buy &amp; Hold supone invertir el capital inicial y no vender hasta el final.</p><iframe class="qs" sandbox="allow-scripts" loading="lazy" srcdoc="{{ row.quantstats_html }}" title="QuantStats {{ row.strategy }}"></iframe>{% else %}<p class="notice">QuantStats no se calcula sin retornos realizados distintos de cero. Esto evita presentar ratios indefinidos como si fueran 0.</p>{% endif %}
 {% else %}<p class="notice error"><strong>Resultado no publicable.</strong> {{ row.error or 'No existe un export válido.' }}</p>{% endif %}</section>{% endfor %}
 <section class="card"><h2>Reproducibilidad</h2><details><summary>Ver metadata completa del run</summary><pre>{{ metadata_json }}</pre></details></section>
 <p class="footer">Investigación, no asesoría financiera. Un backtest no garantiza resultados futuros. Los datos proxy, si se habilitan, deben aparecer etiquetados y nunca se presentan como ejecución Bitso.</p>
@@ -266,6 +356,7 @@ def generate_report(run_dir: Path, output: Path | None = None) -> Path:
         row = {
             **outcome,
             "metrics": None,
+            "monte_carlo": None,
             "quantstats_html": None,
             "error": outcome.get("error_tail", ""),
         }
@@ -275,10 +366,26 @@ def generate_report(run_dir: Path, output: Path | None = None) -> Path:
             try:
                 result = _strategy_result(_read_export(export), outcome["strategy"])
                 returns, balances = _portfolio_returns(result, _read_wallet(export))
-                row["metrics"] = _metrics(result, returns, balances)
-                benchmark = _benchmark_returns(metadata, returns)
+                benchmark, benchmark_pair = _benchmark_returns(metadata, returns)
+                metrics = _metrics(result, returns, balances)
+                metrics.update(
+                    _buy_hold_metrics(
+                        benchmark,
+                        benchmark_pair,
+                        metrics["starting_balance"],
+                    )
+                )
+                row["metrics"] = metrics
+                row["monte_carlo"] = _monte_carlo(
+                    returns,
+                    benchmark_return=metrics["buy_hold_return"],
+                )
                 row["quantstats_html"] = _quantstats_report(
-                    returns, benchmark, outcome["strategy"], market_label
+                    returns,
+                    benchmark,
+                    outcome["strategy"],
+                    market_label,
+                    f"Buy & Hold {benchmark_pair}" if benchmark_pair else None,
                 )
                 if not result["trades"]:
                     row["status"] = "no_trades"

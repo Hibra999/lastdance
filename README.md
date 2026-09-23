@@ -164,7 +164,7 @@ The verified public snapshot contained 54 markets and 26 USD spot candidates. Hi
 
 ## NFI strategies
 
-NFI's current `recommended_config.json` selects `NostalgiaForInfinityX7`. LastDance enables every upstream strategy whose main timeframe is 5m:
+NFI's current `recommended_config.json` selects `NostalgiaForInfinityX7`. LastDance preserves each enabled strategy's upstream main timeframe:
 
 | Strategy | Default | Status | Reason |
 |---|---:|---|---|
@@ -172,9 +172,9 @@ NFI's current `recommended_config.json` selects `NostalgiaForInfinityX7`. LastDa
 | NostalgiaForInfinityX6 | enabled | supported | Maintained comparison generation |
 | X5, X4, X3, X2, X | enabled | historical | Superseded generations retained for comparison |
 | NostalgiaForInfinityNext | enabled | legacy | Legacy 5m comparison |
-| NostalgiaForInfinityNextGen | disabled | legacy | Upstream main timeframe is 15m |
+| NostalgiaForInfinityNextGen | enabled | legacy | Runs at its upstream 15m main timeframe |
 
-All enabled sources are imported through the installed Freqtrade stack and smoke-backtested. X5 and Next receive the minimal reproducible NumPy/Pandas compatibility patch documented under `patches/`; trading conditions and parameters are unchanged. The 5m strategies keep NFI's required 15m, 1h, 4h, and 1d informative frames. LastDance does not tune NFI parameters.
+All enabled sources are imported through the installed Freqtrade stack and smoke-backtested. X5 and Next receive the minimal reproducible NumPy/Pandas compatibility patch documented under `patches/`; trading conditions and parameters are unchanged. The 5m strategies keep NFI's required 15m, 1h, 4h, and 1d informative frames. NextGen runs at 15m. LastDance does not tune NFI parameters.
 
 Toggle a strategy in `config/strategies.yaml`:
 

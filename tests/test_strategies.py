@@ -12,8 +12,9 @@ from lastdance.strategies.runtime_patch import prepare_strategy_path
 
 def test_registry_enabled_strategies() -> None:
     registry = StrategyRegistry()
-    assert [item.timeframe for item in registry.enabled()] == ["5m"] * 8
-    assert registry.get("NostalgiaForInfinityNextGen").enabled is False
+    assert [item.timeframe for item in registry.enabled()].count("5m") == 8
+    assert [item.timeframe for item in registry.enabled()].count("15m") == 1
+    assert registry.get("NostalgiaForInfinityNextGen").enabled is True
     assert all(status == "present" for status in registry.validate_sources().values())
 
 
@@ -34,7 +35,7 @@ def test_enabled_nfi_strategy_imports(name: str) -> None:
         spec.loader.exec_module(module)
         strategy = getattr(module, name)
         assert strategy.INTERFACE_VERSION in {2, 3}
-        assert strategy.timeframe == "5m"
+        assert strategy.timeframe == StrategyRegistry().get(name).timeframe
         assert strategy.startup_candle_count in {480, 800}
     finally:
         sys.modules.pop(spec.name, None)
