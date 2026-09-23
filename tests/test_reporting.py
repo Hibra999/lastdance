@@ -11,6 +11,7 @@ from lastdance.reporting.consolidated import (
     _benchmark_returns,
     _monte_carlo,
     _portfolio_returns,
+    _quantstats_report,
     generate_report,
 )
 
@@ -137,6 +138,20 @@ def test_monte_carlo_is_reproducible() -> None:
     assert first is not None
     assert 0 <= first["probability_profit"] <= 1
     assert first["return_p05"] <= first["return_p50"] <= first["return_p95"]
+
+
+def test_quantstats_keeps_full_buy_hold_period(tmp_path: Path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_report(*_, output, **kwargs) -> None:
+        captured.update(kwargs)
+        Path(output).write_text("<html>ok</html>", encoding="utf-8")
+
+    monkeypatch.setattr(consolidated.qs.reports, "html", fake_report)
+    returns = pd.Series([0.0, 0.01], index=pd.date_range("2026-01-01", periods=2))
+    benchmark = pd.Series([0.0, 0.02], index=returns.index)
+    assert _quantstats_report(returns, benchmark, "Example", "Market", "Buy & Hold")
+    assert captured["match_dates"] is False
 
 
 def test_metadata_json_is_not_accepted_as_a_zero_trade_result(tmp_path: Path) -> None:

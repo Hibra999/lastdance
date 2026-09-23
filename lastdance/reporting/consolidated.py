@@ -288,6 +288,7 @@ def _quantstats_report(
                 output=str(output),
                 periods_per_year=365,
                 figfmt="svg",
+                match_dates=False,
                 strategy_title=f"PnL {strategy}",
                 benchmark_title=benchmark_title,
                 parameters={"PnL": "USD sobre capital inicial", "HODL": "compra inicial, sin ventas"},
