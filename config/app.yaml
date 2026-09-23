@@ -30,7 +30,7 @@ backtest:
   update_data: true
   max_parallel: auto
   stake_amount: unlimited
-  max_open_trades: 8
+  max_open_trades: 6
   export_trades: true
 
 acceleration:
