@@ -141,17 +141,24 @@ def test_monte_carlo_is_reproducible() -> None:
 
 
 def test_quantstats_keeps_full_buy_hold_period(tmp_path: Path, monkeypatch) -> None:
-    captured = {}
+    captured_html = {}
+    captured_metrics = {}
+
+    def fake_metrics(*_, **kwargs):
+        captured_metrics.update(kwargs)
 
     def fake_report(*_, output, **kwargs) -> None:
-        captured.update(kwargs)
+        captured_html.update(kwargs)
+        consolidated.qs.reports.metrics(returns=pd.Series(dtype=float))
         Path(output).write_text("<html>ok</html>", encoding="utf-8")
 
+    monkeypatch.setattr(consolidated.qs.reports, "metrics", fake_metrics)
     monkeypatch.setattr(consolidated.qs.reports, "html", fake_report)
     returns = pd.Series([0.0, 0.01], index=pd.date_range("2026-01-01", periods=2))
     benchmark = pd.Series([0.0, 0.02], index=returns.index)
     assert _quantstats_report(returns, benchmark, "Example", "Market", "Buy & Hold")
-    assert captured["match_dates"] is False
+    assert captured_html["match_dates"] is False
+    assert captured_metrics["match_dates"] is False
 
 
 def test_metadata_json_is_not_accepted_as_a_zero_trade_result(tmp_path: Path) -> None:

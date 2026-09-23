@@ -9,6 +9,7 @@ import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -278,21 +279,32 @@ def _quantstats_report(
         return None
     with tempfile.TemporaryDirectory(prefix="lastdance-quantstats-") as temporary:
         output = Path(temporary) / "report.html"
+        original_metrics = qs.reports.metrics
+
+        def full_period_metrics(*args: Any, **kwargs: Any) -> Any:
+            # QuantStats html() does not forward its match_dates option to metrics().
+            kwargs.setdefault("match_dates", False)
+            return original_metrics(*args, **kwargs)
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             warnings.simplefilter("ignore", UserWarning)
-            qs.reports.html(
-                returns,
-                benchmark=benchmark,
-                title=f"{strategy} · {market_label}",
-                output=str(output),
-                periods_per_year=365,
-                figfmt="svg",
-                match_dates=False,
-                strategy_title=f"PnL {strategy}",
-                benchmark_title=benchmark_title,
-                parameters={"PnL": "USD sobre capital inicial", "HODL": "compra inicial, sin ventas"},
-            )
+            with patch.object(qs.reports, "metrics", full_period_metrics):
+                qs.reports.html(
+                    returns,
+                    benchmark=benchmark,
+                    title=f"{strategy} · {market_label}",
+                    output=str(output),
+                    periods_per_year=365,
+                    figfmt="svg",
+                    match_dates=False,
+                    strategy_title=f"PnL {strategy}",
+                    benchmark_title=benchmark_title,
+                    parameters={
+                        "PnL": "USD sobre capital inicial",
+                        "HODL": "compra inicial, sin ventas",
+                    },
+                )
         return output.read_text(encoding="utf-8")
 
 
